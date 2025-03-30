@@ -10,6 +10,7 @@ The tool is intended to help you in your M365 BEC investigations, or prepare the
 *You can either run it locally or use our solution located at [https://ual-timeline-builder.sagalabs.dk/](https://ual-timeline-builder.sagalabs.dk/)*
 
 The tool is developed by [SagaLabs](https://sagalabs.dk), but feel free to contribute or fork as you like.
+Blogpost: [Link](https://sagalabs.dk/blog/tool-release-ual-timeline-builder)
 
 </div>
 
