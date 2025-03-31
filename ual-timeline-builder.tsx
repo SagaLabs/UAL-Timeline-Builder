@@ -17,16 +17,129 @@ import {
   Info,
   Loader2,
   MapPin,
+  Mail,
+  Moon,
   RefreshCw,
   Search,
   Shield,
+  Sun,
   User,
   X,
+  Inbox,
+  Monitor,
+  Laptop,
+  Network,
+  Code
 } from "lucide-react"
 
+interface RuleDetails {
+  Name: string;
+  Actions: string[];
+  Conditions: string[];
+  Enabled: boolean;
+  Priority: string;
+  StopProcessingRules: boolean;
+}
+
+interface UserAgentInfo {
+  browser: string;
+  browserVersion: string;
+  os: string;
+  osVersion: string;
+  device: string;
+  isMobile: boolean;
+  raw: string;
+}
+
+interface AuditData {
+  ObjectId?: string;
+  Subject?: string;
+  MessageId?: string;
+  InternetMessageId?: string;
+  ClientIP?: string;
+  ClientIPAddress?: string;
+  CorrelationId?: string;
+  CorrelationID?: string;
+  ModifiedProperties?: any[];
+  Parameters?: any[];
+  Workload?: string;
+  UserAgent?: string;
+  MailboxOwnerUPN?: string;
+  MailAccessType?: string;
+  ClientInfoString?: string;
+  AppAccessContext?: {
+    ClientAppId?: string;
+    ClientIPAddress?: string;
+  };
+  OperationProperties?: Array<{
+    Name: string;
+    Value: string;
+  }>;
+  AddOnName?: string;
+  AppDistributionMode?: string;
+  AzureADAppId?: string;
+  ResourceSpecificApplicationPermissions?: string[];
+  ChatThreadId?: string;
+  DeviceId?: string;
+  ExtendedProperties?: any[];
+}
+
+interface LogEntry {
+  AuditData: string | AuditData;
+  Operation: string;
+  CreationDate: string;
+  Workload?: string;
+  UserId?: string;
+  UserKey?: string;
+  RuleDetails?: RuleDetails;
+  FileName?: string;
+  Subject?: string;
+  MessageId?: string;
+  TimeGenerated?: string;
+  ClientIP?: string;
+  CorrelationId?: string;
+  ModifiedProperties?: string;
+  AuditDataRaw?: string;
+  UserAgent?: string;
+  UserAgentInfo?: UserAgentInfo;
+}
+
+interface ModifiedProperty {
+  Name: string;
+  Value: string;
+}
+
+interface Parameter {
+  Name: string;
+  Value: string;
+}
+
+interface ChartData {
+  labels: string[];
+  datasets: {
+    label: string;
+    data: number[];
+    borderColor?: string;
+    backgroundColor?: string;
+    fill?: boolean;
+  }[];
+}
+
+// Add debounce utility function
+const debounce = <T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): ((...args: Parameters<T>) => void) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+};
+
 export default function UALTimelineBuilder() {
-  const [logs, setLogs] = useState<any[]>([])
-  const [fileName, setFileName] = useState("")
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [fileNames, setFileNames] = useState<string[]>([])
   const [userFilters, setUserFilters] = useState<string[]>([])
   const [workloadFilters, setWorkloadFilters] = useState<string[]>([])
   const [operationFilters, setOperationFilters] = useState<string[]>([])
@@ -35,10 +148,25 @@ export default function UALTimelineBuilder() {
   const [visibleCount, setVisibleCount] = useState(100)
   const [loading, setLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
+  const [darkMode, setDarkMode] = useState(() => {
+    // Check if user has a saved preference
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('darkMode')
+      if (saved !== null) {
+        return JSON.parse(saved)
+      }
+      // If no saved preference, check system preference
+      return window.matchMedia('(prefers-color-scheme: dark)').matches
+    }
+    return false
+  })
 
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
   const [workloadDropdownOpen, setWorkloadDropdownOpen] = useState(false)
   const [operationDropdownOpen, setOperationDropdownOpen] = useState(false)
+  const [userSearchTerm, setUserSearchTerm] = useState("")
+  const [workloadSearchTerm, setWorkloadSearchTerm] = useState("")
+  const [operationSearchTerm, setOperationSearchTerm] = useState("")
 
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const workloadDropdownRef = useRef<HTMLDivElement>(null)
@@ -54,7 +182,7 @@ export default function UALTimelineBuilder() {
     "Add user.",
     "Add delegated permission grant.",
     "Set-AdminAuditLogConfig",
-    "Update application - Certificates and secrets management",
+    "Update application – Certificates and secrets management ",
     "Consent to application.",
     "Add service principal.",
     "Update application.",
@@ -64,6 +192,68 @@ export default function UALTimelineBuilder() {
     "Change user password.",
     "Add owner to application."
   ]
+
+  // Add list of email operations
+  const emailOps = [
+    "MailItemsAccessed",
+    "Send",
+    "UpdateInboxRule",
+    "New-InboxRule",
+    "Set-Mailbox",
+    "Set-MailboxAutoReplyConfiguration",
+    "Add-MailboxPermission",
+    "Remove-MailboxPermission",
+    "Update-MailboxPermission",
+    "Move-Mailbox",
+    "New-Mailbox",
+    "Remove-Mailbox",
+    "Set-MailboxRegionalConfiguration",
+    "Set-MailboxCalendarConfiguration",
+    "Set-MailboxMessageConfiguration"
+  ]
+
+  // Add debounced search handler
+  const debouncedSetSearchTerm = useMemo(
+    () => debounce((value: string) => setSearchTerm(value), 300),
+    []
+  );
+
+  // Optimize search fields
+  const searchableFields = useMemo(() => {
+    return logs.map(entry => ({
+      id: entry.UserId || entry.UserKey || '',
+      operation: entry.Operation || '',
+      workload: entry.Workload || '',
+      subject: entry.Subject || '',
+      messageId: entry.MessageId || '',
+      correlationId: entry.CorrelationId || '',
+      clientIP: entry.ClientIP || '',
+      fileName: entry.FileName || '',
+      userAgent: entry.UserAgent || ''
+    }));
+  }, [logs]);
+
+  // Add dark mode effect
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark')
+      localStorage.setItem('darkMode', 'true')
+    } else {
+      document.documentElement.classList.remove('dark')
+      localStorage.setItem('darkMode', 'false')
+    }
+  }, [darkMode])
+
+  // Listen for system theme changes
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = (e: MediaQueryListEvent) => {
+      setDarkMode(e.matches)
+    }
+
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
 
   // Handle click outside to close dropdowns
   useEffect(() => {
@@ -85,67 +275,317 @@ export default function UALTimelineBuilder() {
     }
   }, [])
 
+  const parseUserAgent = (userAgent: string): UserAgentInfo => {
+    const info: UserAgentInfo = {
+      browser: "Unknown",
+      browserVersion: "Unknown",
+      os: "Unknown",
+      osVersion: "Unknown",
+      device: "Unknown",
+      isMobile: false,
+      raw: userAgent
+    };
+
+    try {
+      // Basic browser detection
+      if (userAgent.includes("Firefox")) {
+        info.browser = "Firefox";
+        const match = userAgent.match(/Firefox\/(\d+\.\d+)/);
+        if (match) info.browserVersion = match[1];
+      } else if (userAgent.includes("Chrome")) {
+        info.browser = "Chrome";
+        const match = userAgent.match(/Chrome\/(\d+\.\d+)/);
+        if (match) info.browserVersion = match[1];
+      } else if (userAgent.includes("Safari")) {
+        info.browser = "Safari";
+        const match = userAgent.match(/Version\/(\d+\.\d+)/);
+        if (match) info.browserVersion = match[1];
+      } else if (userAgent.includes("Edge")) {
+        info.browser = "Edge";
+        const match = userAgent.match(/Edge\/(\d+\.\d+)/);
+        if (match) info.browserVersion = match[1];
+      } else if (userAgent.includes("MSIE") || userAgent.includes("Trident/")) {
+        info.browser = "Internet Explorer";
+        const match = userAgent.match(/MSIE (\d+\.\d+)/) || userAgent.match(/rv:(\d+\.\d+)/);
+        if (match) info.browserVersion = match[1];
+      }
+
+      // OS detection
+      if (userAgent.includes("Windows")) {
+        info.os = "Windows";
+        const match = userAgent.match(/Windows NT (\d+\.\d+)/);
+        if (match) {
+          const version = parseFloat(match[1]);
+          info.osVersion = version === 10 ? "10" : version === 6.3 ? "8.1" : version === 6.2 ? "8" : match[1];
+        }
+      } else if (userAgent.includes("Macintosh")) {
+        info.os = "macOS";
+        const match = userAgent.match(/Mac OS X (\d+[._]\d+)/);
+        if (match) info.osVersion = match[1].replace(/_/g, ".");
+      } else if (userAgent.includes("Linux")) {
+        info.os = "Linux";
+        const match = userAgent.match(/Linux ([^;)]+)/);
+        if (match) info.osVersion = match[1];
+      } else if (userAgent.includes("Android")) {
+        info.os = "Android";
+        const match = userAgent.match(/Android (\d+\.\d+)/);
+        if (match) info.osVersion = match[1];
+      } else if (userAgent.includes("iOS")) {
+        info.os = "iOS";
+        const match = userAgent.match(/OS (\d+_\d+)/);
+        if (match) info.osVersion = match[1].replace(/_/g, ".");
+      }
+
+      // Device detection
+      if (userAgent.includes("Mobile")) {
+        info.device = "Mobile";
+        info.isMobile = true;
+      } else if (userAgent.includes("Tablet")) {
+        info.device = "Tablet";
+        info.isMobile = true;
+      } else {
+        info.device = "Desktop";
+        info.isMobile = false;
+      }
+    } catch (e) {
+      console.warn("Error parsing user agent:", e);
+    }
+
+    return info;
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !file.name.endsWith(".csv")) {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+
+    // Check if all files are CSV
+    if (!files.every(file => file.name.endsWith(".csv"))) {
       alert("Only .csv files are supported.")
       return
     }
+
     setLoading(true)
-    setFileName(file.name)
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const data = results.data.map((entry: any) => {
-          let auditData = {}
-          try {
-            auditData = JSON.parse(entry.AuditData || "{}")
-          } catch (err) {
-            console.warn("Failed to parse AuditData", err)
+    setFileNames(files.map(f => f.name))
+
+    // Process files sequentially
+    let allLogs: LogEntry[] = []
+    let processedCount = 0
+
+    const processFile = (file: File) => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const data = results.data.map((entry: LogEntry) => {
+            let auditData: AuditData = {}
+            try {
+              auditData = typeof entry.AuditData === 'string' ? JSON.parse(entry.AuditData) : entry.AuditData
+            } catch (err) {
+              console.warn("Failed to parse AuditData", err)
+            }
+            let ruleDetails = null
+            if (entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule") {
+              try {
+                if (auditData.ModifiedProperties) {
+                  ruleDetails = extractRuleDetails(auditData.ModifiedProperties)
+                } else if (auditData.Parameters) {
+                  ruleDetails = extractRuleDetailsFromParameters(auditData.Parameters)
+                }
+              } catch (err) {
+                console.warn("Failed to parse rule details", err)
+              }
+            }
+
+            // Parse User Agent if available
+            let userAgentInfo: UserAgentInfo | undefined;
+            if (auditData.UserAgent) {
+              userAgentInfo = parseUserAgent(auditData.UserAgent);
+            }
+
+            return {
+              ...entry,
+              FileName: auditData.ObjectId ?? "",
+              Subject: auditData.Subject ?? "",
+              MessageId: auditData.MessageId ?? auditData.InternetMessageId ?? "",
+              TimeGenerated: entry.CreationDate,
+              ClientIP: auditData.ClientIP ?? auditData.ClientIPAddress ?? "",
+              CorrelationId: auditData.CorrelationId ?? auditData.CorrelationID ?? "",
+              ModifiedProperties: auditData.ModifiedProperties
+                ? JSON.stringify(auditData.ModifiedProperties, null, 2)
+                : "N/A",
+              Workload: auditData.Workload ?? entry.Workload ?? "Unknown",
+              AuditDataRaw: entry.AuditData,
+              RuleDetails: ruleDetails ?? undefined,
+              UserAgent: auditData.UserAgent,
+              UserAgentInfo: userAgentInfo
+            }
+          })
+          allLogs = [...allLogs, ...data]
+          processedCount++
+
+          // If all files are processed, update the state
+          if (processedCount === files.length) {
+            setLogs(allLogs)
+            setLoading(false)
           }
-          return {
-            ...entry,
-            FileName: auditData.ObjectId || "",
-            Subject: auditData.Subject || "",
-            MessageId: auditData.MessageId || auditData.InternetMessageId || "",
-            TimeGenerated: entry.CreationDate,
-            ClientIP: auditData.ClientIP || auditData.ClientIPAddress || "",
-            CorrelationId: auditData.CorrelationId || auditData.CorrelationID || "",
-            ModifiedProperties: auditData.ModifiedProperties
-              ? JSON.stringify(auditData.ModifiedProperties, null, 2)
-              : "N/A",
-            Workload: auditData.Workload || entry.Workload || "Unknown",
-            AuditDataRaw: entry.AuditData,
+        },
+        error: (error) => {
+          console.error("Error parsing file:", error)
+          processedCount++
+          if (processedCount === files.length) {
+            setLogs(allLogs)
+            setLoading(false)
           }
-        })
-        setLogs(data)
-        setLoading(false)
-      },
+        }
+      })
+    }
+
+    // Process each file
+    files.forEach(processFile)
+  }
+
+  const extractRuleDetails = (modifiedProperties: ModifiedProperty[]): RuleDetails | null => {
+    if (!Array.isArray(modifiedProperties)) return null;
+
+    const details: RuleDetails = {
+      Name: "",
+      Actions: [],
+      Conditions: [],
+      Enabled: true,
+      Priority: "",
+      StopProcessingRules: false,
+    };
+
+    modifiedProperties.forEach((prop) => {
+      if (prop.Name === "Name" && prop.Value) {
+        details.Name = prop.Value;
+      } else if (prop.Name === "ForwardTo" || prop.Name === "RedirectTo") {
+        details.Actions.push(`Forward to: ${prop.Value}`);
+      } else if (prop.Name === "DeleteMessage") {
+        details.Actions.push("Delete message");
+      } else if (prop.Name === "MoveToFolder") {
+        details.Actions.push(`Move to folder: ${prop.Value}`);
+      } else if (prop.Name === "From") {
+        details.Conditions.push(`From: ${prop.Value}`);
+      } else if (prop.Name === "SubjectContainsWords") {
+        details.Conditions.push(`Subject contains: ${prop.Value}`);
+      } else if (prop.Name === "BodyContainsWords") {
+        details.Conditions.push(`Body contains: ${prop.Value}`);
+      } else if (prop.Name === "Enabled") {
+        details.Enabled = prop.Value === "True";
+      } else if (prop.Name === "Priority") {
+        details.Priority = prop.Value;
+      } else if (prop.Name === "StopProcessingRules") {
+        details.StopProcessingRules = prop.Value === "True";
+      }
+    });
+
+    return details;
+  };
+
+  const extractRuleDetailsFromParameters = (parameters: Parameter[]): RuleDetails | null => {
+    if (!Array.isArray(parameters)) return null;
+
+    const details: RuleDetails = {
+      Name: "",
+      Actions: [],
+      Conditions: [],
+      Enabled: true,
+      Priority: "",
+      StopProcessingRules: false,
+    };
+
+    parameters.forEach((param) => {
+      if (param.Name === "Name" && param.Value) {
+        details.Name = param.Value
+      } else if (
+        param.Name === "ForwardTo" ||
+        param.Name === "ForwardAsAttachmentTo" ||
+        (param.Name === "RedirectTo" && param.Value)
+      ) {
+        details.Actions.push(`Forward to: ${param.Value.replace(/\[|\]/g, "")}`)
+      } else if (param.Name === "DeleteMessage" && param.Value === "True") {
+        details.Actions.push("Delete message")
+      } else if (param.Name === "MoveToFolder" && param.Value) {
+        details.Actions.push(`Move to folder: ${param.Value}`)
+      } else if (param.Name === "CopyToFolder" && param.Value) {
+        details.Actions.push(`Copy to folder: ${param.Value}`)
+      } else if (param.Name === "From" && param.Value) {
+        details.Conditions.push(`From: ${param.Value.replace(/\[|\]/g, "")}`)
+      } else if (param.Name === "SubjectContainsWords" && param.Value) {
+        details.Conditions.push(`Subject contains: ${param.Value}`)
+      } else if (param.Name === "BodyContainsWords" && param.Value) {
+        details.Conditions.push(`Body contains: ${param.Value}`)
+      } else if (param.Name === "Enabled" && param.Value) {
+        details.Enabled = param.Value === "True"
+      } else if (param.Name === "Priority" && param.Value) {
+        details.Priority = param.Value
+      } else if (param.Name === "StopProcessingRules" && param.Value) {
+        details.StopProcessingRules = param.Value === "True"
+      }
     })
+
+    return details
   }
 
   const userOptions = useMemo(() => Array.from(new Set(logs.map((e) => e.UserId || e.UserKey).filter(Boolean))), [logs])
   const workloadOptions = useMemo(() => Array.from(new Set(logs.map((e) => e.Workload).filter(Boolean))), [logs])
   const operationOptions = useMemo(() => Array.from(new Set(logs.map((e) => e.Operation).filter(Boolean))), [logs])
 
+  // Filter options based on search terms
+  const filteredUserOptions = useMemo(() => {
+    if (!userSearchTerm) return userOptions;
+    return userOptions.filter(user => 
+      user.toLowerCase().includes(userSearchTerm.toLowerCase())
+    );
+  }, [userOptions, userSearchTerm]);
+
+  const filteredWorkloadOptions = useMemo(() => {
+    if (!workloadSearchTerm) return workloadOptions;
+    return workloadOptions.filter(workload => 
+      workload.toLowerCase().includes(workloadSearchTerm.toLowerCase())
+    );
+  }, [workloadOptions, workloadSearchTerm]);
+
+  const filteredOperationOptions = useMemo(() => {
+    if (!operationSearchTerm) return operationOptions;
+    return operationOptions.filter(operation => 
+      operation.toLowerCase().includes(operationSearchTerm.toLowerCase())
+    );
+  }, [operationOptions, operationSearchTerm]);
+
   const filteredLogs = useMemo(() => {
-    return logs.filter((entry) => {
+    return logs.filter((entry, index) => {
       // Multi-select filters - if no filters selected, show all
-      const userMatch = userFilters.length === 0 || userFilters.includes(entry.UserId || entry.UserKey)
-      const workloadMatch = workloadFilters.length === 0 || workloadFilters.includes(entry.Workload)
-      const operationMatch = operationFilters.length === 0 || operationFilters.includes(entry.Operation)
+      const userMatch = userFilters.length === 0 || userFilters.includes(entry.UserId || entry.UserKey || '')
+      const workloadMatch = workloadFilters.length === 0 || workloadFilters.includes(entry.Workload || '')
+      const operationMatch = operationFilters.length === 0 || operationFilters.includes(entry.Operation || '')
 
       // Single-select filters
       const correlationMatch = correlationFilter ? entry.CorrelationId === correlationFilter : true
-      const riskyMatch = showOnlyRisky ? riskyOps.includes(entry.Operation) : true
+      const riskyMatch = showOnlyRisky ? riskyOps.includes(entry.Operation || '') : true
 
-      // Search functionality
-      const searchMatch = searchTerm ? JSON.stringify(entry).toLowerCase().includes(searchTerm.toLowerCase()) : true
+      // Optimized search functionality
+      const searchMatch = !searchTerm || (() => {
+        const searchLower = searchTerm.toLowerCase();
+        const searchableEntry = searchableFields[index];
+        
+        return (
+          searchableEntry.id.toLowerCase().includes(searchLower) ||
+          searchableEntry.operation.toLowerCase().includes(searchLower) ||
+          searchableEntry.workload.toLowerCase().includes(searchLower) ||
+          searchableEntry.subject.toLowerCase().includes(searchLower) ||
+          searchableEntry.messageId.toLowerCase().includes(searchLower) ||
+          searchableEntry.correlationId.toLowerCase().includes(searchLower) ||
+          searchableEntry.clientIP.toLowerCase().includes(searchLower) ||
+          searchableEntry.fileName.toLowerCase().includes(searchLower) ||
+          searchableEntry.userAgent.toLowerCase().includes(searchLower)
+        );
+      })();
 
       return userMatch && workloadMatch && operationMatch && correlationMatch && riskyMatch && searchMatch
     })
-  }, [logs, userFilters, workloadFilters, operationFilters, correlationFilter, showOnlyRisky, searchTerm])
+  }, [logs, userFilters, workloadFilters, operationFilters, correlationFilter, showOnlyRisky, searchTerm, searchableFields])
 
   const visibleLogs = filteredLogs.slice(0, visibleCount)
 
@@ -194,6 +634,151 @@ export default function UALTimelineBuilder() {
     a.click()
     URL.revokeObjectURL(url)
   }
+
+  const downloadInternetMessageIds = () => {
+    // Create a map to store message IDs and their details
+    const messageStats = new Map<string, {
+      readBy: Set<string>;
+      readAt: string[];
+      subject: string;
+      workload: string;
+      clientIP: string;
+      folderPath: string;
+      sizeInBytes: number;
+    }>();
+
+    // Process each log entry
+    logs.forEach(entry => {
+      try {
+        // Parse AuditData if it's a string
+        let auditData: any = entry.AuditData;
+        if (typeof auditData === 'string') {
+          auditData = JSON.parse(auditData);
+        }
+
+        // Look for InternetMessageId in the nested structure
+        if (auditData.Folders && Array.isArray(auditData.Folders)) {
+          auditData.Folders.forEach((folder: any) => {
+            if (folder.FolderItems && Array.isArray(folder.FolderItems)) {
+              folder.FolderItems.forEach((item: any) => {
+                if (item.InternetMessageId && item.InternetMessageId.match(/<[^>]+@[^>]+>/)) {
+                  const existing = messageStats.get(item.InternetMessageId) || {
+                    readBy: new Set<string>(),
+                    readAt: [],
+                    subject: entry.Subject || 'N/A',
+                    workload: entry.Workload || 'Unknown',
+                    clientIP: entry.ClientIP || 'N/A',
+                    folderPath: folder.Path || 'Unknown',
+                    sizeInBytes: item.SizeInBytes || 0
+                  };
+
+                  // Add user who read the message
+                  if (entry.UserId || entry.UserKey) {
+                    existing.readBy.add(entry.UserId || entry.UserKey);
+                  }
+
+                  // Add read timestamp
+                  if (entry.TimeGenerated) {
+                    existing.readAt.push(entry.TimeGenerated);
+                  }
+
+                  messageStats.set(item.InternetMessageId, existing);
+                }
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.warn("Error processing log entry:", e);
+      }
+    });
+
+    // Convert to CSV format
+    const csvRows = ['InternetMessageId,Subject,Workload,Read By,Read Timestamps,Client IP,Folder Path,Size (Bytes)'];
+    messageStats.forEach((data, messageId) => {
+      const readBy = Array.from(data.readBy).join('; ');
+      const readAt = data.readAt.join('; ');
+      csvRows.push(`"${messageId}","${data.subject}","${data.workload}","${readBy}","${readAt}","${data.clientIP}","${data.folderPath}",${data.sizeInBytes}`);
+    });
+
+    // Create and download the file
+    const csvContent = csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'internet-message-ids.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadIPStats = () => {
+    // Create a map to store IP statistics
+    const ipStats = new Map<string, {
+      users: Set<string>;
+      timestamps: string[];
+      operations: Set<string>;
+      workloads: Set<string>;
+    }>();
+
+    // Process each log entry
+    logs.forEach(entry => {
+      const ip = entry.ClientIP || entry.ClientIPAddress;
+      if (!ip) return;
+
+      const existing = ipStats.get(ip) || {
+        users: new Set<string>(),
+        timestamps: [],
+        operations: new Set<string>(),
+        workloads: new Set<string>()
+      };
+
+      // Add user
+      if (entry.UserId || entry.UserKey) {
+        existing.users.add(entry.UserId || entry.UserKey);
+      }
+
+      // Add timestamp
+      if (entry.TimeGenerated) {
+        existing.timestamps.push(entry.TimeGenerated);
+      }
+
+      // Add operation
+      if (entry.Operation) {
+        existing.operations.add(entry.Operation);
+      }
+
+      // Add workload
+      if (entry.Workload) {
+        existing.workloads.add(entry.Workload);
+      }
+
+      ipStats.set(ip, existing);
+    });
+
+    // Convert to CSV format
+    const csvRows = ['IP Address,Users,First Seen,Last Seen,Operations,Workloads'];
+    ipStats.forEach((data, ip) => {
+      const users = Array.from(data.users).join('; ');
+      const timestamps = data.timestamps.sort();
+      const firstSeen = timestamps[0] || 'N/A';
+      const lastSeen = timestamps[timestamps.length - 1] || 'N/A';
+      const operations = Array.from(data.operations).join('; ');
+      const workloads = Array.from(data.workloads).join('; ');
+      
+      csvRows.push(`"${ip}","${users}","${firstSeen}","${lastSeen}","${operations}","${workloads}"`);
+    });
+
+    // Create and download the file
+    const csvContent = csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ip-usage-stats.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const formatDate = (dateString: string) => {
     if (!dateString) return ""
@@ -247,14 +832,23 @@ export default function UALTimelineBuilder() {
       <div className="max-w-6xl mx-auto bg-white dark:bg-gray-900 shadow-xl rounded-xl border border-slate-200 dark:border-gray-700 overflow-hidden">
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white">
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Shield className="h-8 w-8" />
-            UAL-Timeline-Builder (UTB)
-          </h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-3xl font-bold flex items-center gap-2">
+              <Shield className="h-8 w-8" />
+              UAL-Timeline-Builder (UTB)
+            </h1>
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+              title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {darkMode ? <Sun className="h-6 w-6" /> : <Moon className="h-6 w-6" />}
+            </button>
+          </div>
           <p className="mt-2 opacity-90">Analyze and visualize Microsoft 365 Unified Audit Logs (or export to ndjson)</p>
           <p className="mt-2 text-sm font-medium text-yellow-200">
-  ⚠️ This tool processes data entirely in your browser. No data is stored or transmitted to any server.
-</p>
+            ⚠️ This tool processes data entirely in your browser. No data is stored or transmitted to any server.
+          </p>
         </div>
 
         {/* Upload Section */}
@@ -267,16 +861,16 @@ export default function UALTimelineBuilder() {
               </div>
               <div className="flex-shrink-0">
                 <label className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg cursor-pointer transition-colors">
-                  <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-                  <span>Select File</span>
+                  <input type="file" accept=".csv" multiple onChange={handleFileUpload} className="hidden" />
+                  <span>Select Files</span>
                 </label>
               </div>
             </div>
-            {fileName && (
+            {fileNames.length > 0 && (
               <div className="mt-4 flex items-center gap-2 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 p-2 px-3 rounded-lg">
                 <Info className="h-4 w-4" />
                 <span>
-                  Uploaded: <span className="font-medium">{fileName}</span>
+                  Uploaded: <span className="font-medium">{fileNames.length} file{fileNames.length > 1 ? 's' : ''}</span>
                 </span>
               </div>
             )}
@@ -303,8 +897,7 @@ export default function UALTimelineBuilder() {
                       <input
                         type="text"
                         placeholder="Search logs..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onChange={(e) => debouncedSetSearchTerm(e.target.value)}
                         className="pl-9 pr-4 py-2 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none transition-all"
                       />
                       {searchTerm && (
@@ -317,11 +910,28 @@ export default function UALTimelineBuilder() {
                       )}
                     </div>
                     <button
-                      onClick={downloadNDJSON}
-                      className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-gray-600 text-white rounded-lg transition-colors"
+                      onClick={downloadInternetMessageIds}
+                      className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-gray-600 text-white rounded-lg transition-colors text-sm"
                     >
-                      <Download className="h-4 w-4" />
-                      <span>Export to ndjson</span>
+                      <Mail className="h-3.5 w-3.5" />
+                      <span>Export Mail Activity</span>
+                      <span className="text-xs text-slate-300 dark:text-slate-400">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
+                    </button>
+                    <button
+                      onClick={downloadIPStats}
+                      className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-gray-600 text-white rounded-lg transition-colors text-sm"
+                    >
+                      <Globe className="h-3.5 w-3.5" />
+                      <span>Export IP Stats</span>
+                      <span className="text-xs text-slate-300 dark:text-slate-400">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
+                    </button>
+                    <button
+                      onClick={downloadNDJSON}
+                      className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-gray-600 text-white rounded-lg transition-colors text-sm"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      <span>Export to NDJSON</span>
+                      <span className="text-xs text-slate-300 dark:text-slate-400">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
                     </button>
                   </div>
                 </div>
@@ -374,15 +984,27 @@ export default function UALTimelineBuilder() {
                       {userDropdownOpen && (
                         <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-700 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg max-h-60 overflow-auto">
                           <div className="p-2 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-gray-700 z-10">
-                            <button
-                              onClick={() => setUserFilters([])}
-                              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                            >
-                              Clear all
-                            </button>
+                            <div className="flex items-center justify-between mb-2">
+                              <button
+                                onClick={() => setUserFilters([])}
+                                className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative">
+                                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Search users..."
+                                  value={userSearchTerm}
+                                  onChange={(e) => setUserSearchTerm(e.target.value)}
+                                  className="pl-8 pr-2 py-1 text-xs w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-800 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none"
+                                />
+                              </div>
+                            </div>
                           </div>
                           <div className="p-1">
-                            {userOptions.map((user) => (
+                            {filteredUserOptions.map((user) => (
                               <div
                                 key={user}
                                 className="flex items-center px-3 py-2 hover:bg-slate-100 dark:hover:bg-gray-600 rounded cursor-pointer"
@@ -429,15 +1051,27 @@ export default function UALTimelineBuilder() {
                       {workloadDropdownOpen && (
                         <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-700 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg max-h-60 overflow-auto">
                           <div className="p-2 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-gray-700 z-10">
-                            <button
-                              onClick={() => setWorkloadFilters([])}
-                              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                            >
-                              Clear all
-                            </button>
+                            <div className="flex items-center justify-between mb-2">
+                              <button
+                                onClick={() => setWorkloadFilters([])}
+                                className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative">
+                                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Search workloads..."
+                                  value={workloadSearchTerm}
+                                  onChange={(e) => setWorkloadSearchTerm(e.target.value)}
+                                  className="pl-8 pr-2 py-1 text-xs w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-800 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none"
+                                />
+                              </div>
+                            </div>
                           </div>
                           <div className="p-1">
-                            {workloadOptions.map((workload) => (
+                            {filteredWorkloadOptions.map((workload) => (
                               <div
                                 key={workload}
                                 className="flex items-center px-3 py-2 hover:bg-slate-100 dark:hover:bg-gray-600 rounded cursor-pointer"
@@ -484,15 +1118,27 @@ export default function UALTimelineBuilder() {
                       {operationDropdownOpen && (
                         <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-700 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg max-h-60 overflow-auto">
                           <div className="p-2 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-gray-700 z-10">
-                            <button
-                              onClick={() => setOperationFilters([])}
-                              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                            >
-                              Clear all
-                            </button>
+                            <div className="flex items-center justify-between mb-2">
+                              <button
+                                onClick={() => setOperationFilters([])}
+                                className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative">
+                                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Search operations..."
+                                  value={operationSearchTerm}
+                                  onChange={(e) => setOperationSearchTerm(e.target.value)}
+                                  className="pl-8 pr-2 py-1 text-xs w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-800 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none"
+                                />
+                              </div>
+                            </div>
                           </div>
                           <div className="p-1">
-                            {operationOptions.map((operation) => (
+                            {filteredOperationOptions.map((operation) => (
                               <div
                                 key={operation}
                                 className="flex items-center px-3 py-2 hover:bg-slate-100 dark:hover:bg-gray-600 rounded cursor-pointer"
@@ -740,13 +1386,315 @@ export default function UALTimelineBuilder() {
                                 </div>
                               </div>
                             </div>
+  {/* Special display for inbox rules */}
+  {(entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule") &&
+                              entry.RuleDetails && (
+                                <div className="mt-3 mb-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+                                  <h4 className="font-bold text-yellow-800 dark:text-yellow-300 mb-2 flex items-center gap-2">
+                                    <AlertTriangle className="h-4 w-4" />
+                                    Inbox Rule Details
+                                  </h4>
 
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                    {entry.RuleDetails.Name && (
+                                      <div>
+                                        <span className="font-bold text-yellow-700 dark:text-yellow-400">
+                                          Rule Name:
+                                        </span>{" "}
+                                        <span className="text-yellow-900 dark:text-yellow-200 font-normal">
+                                          {entry.RuleDetails.Name}
+                                        </span>
+                                      </div>
+                                    )}
+
+                                    {entry.RuleDetails.Priority && (
+                                      <div>
+                                        <span className="font-bold text-yellow-700 dark:text-yellow-400">
+                                          Priority:
+                                        </span>{" "}
+                                        <span className="text-yellow-900 dark:text-yellow-200 font-normal">
+                                          {entry.RuleDetails.Priority}
+                                        </span>
+                                      </div>
+                                    )}
+
+                                    <div className="md:col-span-2">
+                                      <span className="font-bold text-yellow-700 dark:text-yellow-400">Status:</span>{" "}
+                                      <span
+                                        className={`font-normal ${entry.RuleDetails.Enabled ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+                                      >
+                                        {entry.RuleDetails.Enabled ? "Enabled" : "Disabled"}
+                                      </span>
+                                      {entry.RuleDetails.StopProcessingRules && (
+                                        <span className="ml-2 text-red-600 dark:text-red-400 font-normal">
+                                          (Stops processing other rules)
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {entry.RuleDetails.Conditions && entry.RuleDetails.Conditions.length > 0 && (
+                                      <div className="md:col-span-2">
+                                        <span className="font-bold text-yellow-700 dark:text-yellow-400 block mb-1">
+                                          Conditions:
+                                        </span>
+                                        <ul className="list-disc pl-5 space-y-1 text-yellow-900 dark:text-yellow-200 font-normal">
+                                          {entry.RuleDetails.Conditions.map((condition, i) => (
+                                            <li key={i}>{condition}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+
+                                    {entry.RuleDetails.Actions && entry.RuleDetails.Actions.length > 0 && (
+                                      <div className="md:col-span-2">
+                                        <span className="font-bold text-yellow-700 dark:text-yellow-400 block mb-1">
+                                          Actions:
+                                        </span>
+                                        <ul className="list-disc pl-5 space-y-1 text-yellow-900 dark:text-yellow-200 font-normal">
+                                          {entry.RuleDetails.Actions.map((action, i) => (
+                                            <li key={i}>{action}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
                             <details className="group">
                               <summary className="cursor-pointer list-none flex items-center gap-1 text-sm font-medium text-slate-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
                                 <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
                                 View Details
                               </summary>
                               <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 text-sm space-y-3">
+                                {/* App Installation Details */}
+                                {entry.Operation === "AppInstalled" && (
+                                  <div>
+                                    <div className="mb-2 flex items-center gap-2 text-purple-700 dark:text-purple-300">
+                                      <Monitor className="h-5 w-5" />
+                                      <span className="font-semibold">App Installation Details</span>
+                                    </div>
+                                    <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+                                      <div className="space-y-3">
+                                        {(() => {
+                                          let parsedAuditData: AuditData | null = null;
+                                          try {
+                                            parsedAuditData = typeof entry.AuditData === 'string' 
+                                              ? JSON.parse(entry.AuditData)
+                                              : entry.AuditData;
+                                          } catch (e) {
+                                            console.warn('Failed to parse AuditData:', e);
+                                          }
+
+                                          if (!parsedAuditData) return null;
+
+                                          return (
+                                            <>
+                                              {parsedAuditData.AddOnName && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-purple-100 dark:border-purple-900">
+                                                  <Monitor className="h-5 w-5 text-purple-600 dark:text-purple-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-purple-700 dark:text-purple-300">App Name</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100">{parsedAuditData.AddOnName}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {parsedAuditData.AppDistributionMode && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-purple-100 dark:border-purple-900">
+                                                  <Globe className="h-5 w-5 text-purple-600 dark:text-purple-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-purple-700 dark:text-purple-300">Distribution Mode</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100">{parsedAuditData.AppDistributionMode}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {parsedAuditData.AzureADAppId && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-purple-100 dark:border-purple-900">
+                                                  <Shield className="h-5 w-5 text-purple-600 dark:text-purple-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-purple-700 dark:text-purple-300">Azure AD App ID</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100 break-all">{parsedAuditData.AzureADAppId}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {parsedAuditData.ResourceSpecificApplicationPermissions && parsedAuditData.ResourceSpecificApplicationPermissions.length > 0 && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-purple-100 dark:border-purple-900">
+                                                  <Shield className="h-5 w-5 text-purple-600 dark:text-purple-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-purple-700 dark:text-purple-300">App Permissions</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100">
+                                                      <ul className="list-disc pl-5 space-y-1">
+                                                        {parsedAuditData.ResourceSpecificApplicationPermissions.map((permission, index) => (
+                                                          <li key={index}>{permission}</li>
+                                                        ))}
+                                                      </ul>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {parsedAuditData.ChatThreadId && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-purple-100 dark:border-purple-900">
+                                                  <Inbox className="h-5 w-5 text-purple-600 dark:text-purple-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-purple-700 dark:text-purple-300">Chat Thread ID</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100 break-all">{parsedAuditData.ChatThreadId}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {parsedAuditData.DeviceId && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-purple-100 dark:border-purple-900">
+                                                  <Laptop className="h-5 w-5 text-purple-600 dark:text-purple-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-purple-700 dark:text-purple-300">Device ID</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100 break-all">{parsedAuditData.DeviceId}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                            </>
+                                          );
+                                        })()}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Mail Access Details for all email operations */}
+                                {emailOps.includes(entry.Operation) && (
+                                  <div>
+                                    <div className="mb-2 flex items-center gap-2 text-blue-700 dark:text-blue-300">
+                                      <Mail className="h-5 w-5" />
+                                      <span className="font-semibold">Mail Access Details</span>
+                                    </div>
+                                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                                      <div className="space-y-3">
+                                        {(() => {
+                                          let parsedAuditData: AuditData | null = null;
+                                          try {
+                                            parsedAuditData = typeof entry.AuditData === 'string' 
+                                              ? JSON.parse(entry.AuditData)
+                                              : entry.AuditData;
+                                          } catch (e) {
+                                            console.warn('Failed to parse AuditData:', e);
+                                          }
+
+                                          if (!parsedAuditData) return null;
+
+                                          return (
+                                            <>
+                                              {parsedAuditData.MailboxOwnerUPN && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                                  <User className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-blue-700 dark:text-blue-300">Mailbox Owner</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100">{parsedAuditData.MailboxOwnerUPN}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {parsedAuditData.ClientInfoString && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                                  <Monitor className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-blue-700 dark:text-blue-300">Client Info</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100 break-all">{parsedAuditData.ClientInfoString}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {parsedAuditData.OperationProperties?.find(prop => prop.Name === "MailAccessType") && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                                  <Network className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-blue-700 dark:text-blue-300">Mail Access Type</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100">
+                                                      {parsedAuditData.OperationProperties.find(prop => prop.Name === "MailAccessType")?.Value}
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                              {entry.Operation === "Send" && parsedAuditData.Subject && (
+                                                <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                                  <Mail className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                                  <div>
+                                                    <div className="text-sm font-medium text-blue-700 dark:text-blue-300">Email Subject</div>
+                                                    <div className="text-sm text-slate-900 dark:text-slate-100">{parsedAuditData.Subject}</div>
+                                                  </div>
+                                                </div>
+                                              )}
+                                            </>
+                                          );
+                                        })()}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {entry.UserAgentInfo && (
+                                  <div>
+                                    <div className="mb-2 flex items-center gap-2 text-blue-700 dark:text-blue-300">
+                                      <Monitor className="h-5 w-5" />
+                                      <span className="font-semibold">Client Details</span>
+                                    </div>
+                                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                                      <div className="space-y-3">
+                                        <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                          <Globe className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                          <div>
+                                            <div className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                                              Browser
+                                            </div>
+                                            <div className="mt-1 text-sm text-slate-900 dark:text-slate-100">
+                                              {entry.UserAgentInfo.browser}
+                                              {entry.UserAgentInfo.browserVersion !== "Unknown" && (
+                                                <span className="text-slate-500 dark:text-slate-400"> v{entry.UserAgentInfo.browserVersion}</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                          <Monitor className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                          <div>
+                                            <div className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                                              Operating System
+                                            </div>
+                                            <div className="mt-1 text-sm text-slate-900 dark:text-slate-100">
+                                              {entry.UserAgentInfo.os}
+                                              {entry.UserAgentInfo.osVersion !== "Unknown" && (
+                                                <span className="text-slate-500 dark:text-slate-400"> {entry.UserAgentInfo.osVersion}</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                          <Laptop className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                          <div>
+                                            <div className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                                              Device Type
+                                            </div>
+                                            <div className="mt-1 text-sm text-slate-900 dark:text-slate-100">
+                                              {entry.UserAgentInfo.device}
+                                              {entry.UserAgentInfo.isMobile && (
+                                                <span className="text-slate-500 dark:text-slate-400"> (Mobile Device)</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-blue-100 dark:border-blue-900">
+                                          <Code className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                          <div>
+                                            <div className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                                              Raw User Agent
+                                            </div>
+                                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 break-all">
+                                              {entry.UserAgentInfo.raw}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
                                 {entry.FileName && (
                                   <div>
                                     <div className="font-medium mb-1">File</div>
@@ -768,8 +1716,122 @@ export default function UALTimelineBuilder() {
                                   </div>
                                 )}
 
+                                {entry.Operation === "Update application – Certificates and secrets management " && entry.ModifiedProperties && (
+                                  <div>
+                                    <div className="mb-2 flex items-center gap-2 text-red-700 dark:text-red-300">
+                                      <Shield className="h-5 w-5" />
+                                      <span className="font-semibold">Certificate & Secret Changes</span>
+                                    </div>
+                                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                                      <div className="space-y-3">
+                                        {(() => {
+                                          let modifiedProps: any[] = [];
+                                          try {
+                                            if (typeof entry.ModifiedProperties === 'string') {
+                                              modifiedProps = JSON.parse(entry.ModifiedProperties);
+                                            } else {
+                                              modifiedProps = entry.ModifiedProperties;
+                                            }
+                                          } catch (e) {
+                                            console.warn('Failed to parse ModifiedProperties:', e);
+                                            return null;
+                                          }
+
+                                          const keyDescriptionProp = modifiedProps.find(prop => prop.Name === 'KeyDescription');
+                                          if (!keyDescriptionProp) {
+                                            return (
+                                              <div className="text-sm text-slate-600 dark:text-slate-400">
+                                                No certificate or secret changes found
+                                              </div>
+                                            );
+                                          }
+
+                                          // Parse the old and new values
+                                          const parseKeyList = (value: string) => {
+                                            try {
+                                              const parsed = JSON.parse(value);
+                                              return parsed.map((item: string) => {
+                                                const match = item.match(/KeyIdentifier=([^,]+),KeyType=([^,]+),KeyUsage=([^,]+),DisplayName=([^\]]+)/);
+                                                if (match) {
+                                                  return {
+                                                    keyId: match[1],
+                                                    keyType: match[2],
+                                                    keyUsage: match[3],
+                                                    displayName: match[4]
+                                                  };
+                                                }
+                                                return null;
+                                              }).filter(Boolean);
+                                            } catch (e) {
+                                              console.warn('Failed to parse key list:', e);
+                                              return [];
+                                            }
+                                          };
+
+                                          const oldKeys = parseKeyList(keyDescriptionProp.OldValue);
+                                          const newKeys = parseKeyList(keyDescriptionProp.NewValue);
+
+                                          // Find added and removed keys
+                                          const addedKeys = newKeys.filter(newKey => 
+                                            !oldKeys.some(oldKey => oldKey.keyId === newKey.keyId)
+                                          );
+                                          const removedKeys = oldKeys.filter(oldKey => 
+                                            !newKeys.some(newKey => newKey.keyId === oldKey.keyId)
+                                          );
+
+                                          return (
+                                            <>
+                                              {addedKeys.length > 0 && (
+                                                <div className="space-y-2">
+                                                  <div className="text-sm font-medium text-green-600 dark:text-green-400">Added:</div>
+                                                  {addedKeys.map((key, index) => (
+                                                    <div key={index} className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-green-100 dark:border-green-900">
+                                                      <Shield className="h-5 w-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
+                                                      <div>
+                                                        <div className="text-sm font-medium text-green-700 dark:text-green-300">
+                                                          {key.displayName}
+                                                        </div>
+                                                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                                          Type: {key.keyType}, Usage: {key.keyUsage}
+                                                        </div>
+                                                      </div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                              {removedKeys.length > 0 && (
+                                                <div className="space-y-2">
+                                                  <div className="text-sm font-medium text-red-600 dark:text-red-400">Removed:</div>
+                                                  {removedKeys.map((key, index) => (
+                                                    <div key={index} className="flex items-start gap-3 p-2 bg-white/50 dark:bg-black/10 rounded border border-red-100 dark:border-red-900">
+                                                      <Shield className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                                                      <div>
+                                                        <div className="text-sm font-medium text-red-700 dark:text-red-300">
+                                                          {key.displayName}
+                                                        </div>
+                                                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                                          Type: {key.keyType}, Usage: {key.keyUsage}
+                                                        </div>
+                                                      </div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                              {addedKeys.length === 0 && removedKeys.length === 0 && (
+                                                <div className="text-sm text-slate-600 dark:text-slate-400">
+                                                  Keys were reordered but no additions or removals were made
+                                                </div>
+                                              )}
+                                            </>
+                                          );
+                                        })()}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
                                 <div>
-                                  <div className="font-medium mb-1">Modified Properties</div>
+                                  <div className="font-medium mb-1">Raw Modified Properties</div>
                                   <pre className="bg-slate-50 dark:bg-gray-800 p-3 rounded-lg overflow-auto text-xs whitespace-pre-wrap">
                                     {entry.ModifiedProperties}
                                   </pre>
@@ -844,7 +1906,7 @@ export default function UALTimelineBuilder() {
       </div>
 
       <div className="mt-4 text-center text-xs text-slate-500 dark:text-gray-400">
-      <a href="https://github.com/SagaLabs/UAL-Timeline-Builder">https://github.com/SagaLabs/UAL-Timeline-Builder</a>
+        <a href="https://github.com/SagaLabs/UAL-Timeline-Builder">https://github.com/SagaLabs/UAL-Timeline-Builder</a>
       </div>
     </div>
   )
