@@ -34,7 +34,9 @@ import {
   Save,
   Upload,
   PencilIcon,
-  FileText
+  FileText,
+  Map,
+  ChartBar
 } from "lucide-react"
 
 interface RuleDetails {
@@ -102,6 +104,7 @@ interface LogEntry {
   MessageId?: string;
   TimeGenerated?: string;
   ClientIP?: string;
+  ClientIPAddress?: string;
   CorrelationId?: string;
   ModifiedProperties?: string;
   AuditDataRaw?: string;
@@ -198,12 +201,27 @@ const useDarkMode = () => {
   return [darkMode, setDarkMode, mounted] as const;
 };
 
+interface AuthenticationStats {
+  ip: string;
+  userId: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  operations: Set<string>;
+}
+
+interface ReportSection {
+  title: string;
+  content: string;
+}
+
 export default function UALTimelineBuilder() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [fileNames, setFileNames] = useState<string[]>([])
   const [userFilters, setUserFilters] = useState<string[]>([])
   const [workloadFilters, setWorkloadFilters] = useState<string[]>([])
   const [operationFilters, setOperationFilters] = useState<string[]>([])
+  const [ipFilters, setIpFilters] = useState<string[]>([])
   const [correlationFilter, setCorrelationFilter] = useState("")
   const [showOnlyRisky, setShowOnlyRisky] = useState(false)
   const [visibleCount, setVisibleCount] = useState(100)
@@ -216,18 +234,24 @@ export default function UALTimelineBuilder() {
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
   const [workloadDropdownOpen, setWorkloadDropdownOpen] = useState(false)
   const [operationDropdownOpen, setOperationDropdownOpen] = useState(false)
+  const [ipDropdownOpen, setIpDropdownOpen] = useState(false)
   const [userSearchTerm, setUserSearchTerm] = useState("")
   const [workloadSearchTerm, setWorkloadSearchTerm] = useState("")
   const [operationSearchTerm, setOperationSearchTerm] = useState("")
+  const [ipSearchTerm, setIpSearchTerm] = useState("")
   const [showIPExportModal, setShowIPExportModal] = useState(false)
   const [timelineEvents, setTimelineEvents] = useState<TimelineEntry[]>([]);
   const [showTimeline, setShowTimeline] = useState(false);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [timelineSortAsc, setTimelineSortAsc] = useState(true); // Add state for sort direction
+  const [showAuthBaseline, setShowAuthBaseline] = useState(false);
+  const [authBaselineData, setAuthBaselineData] = useState<AuthenticationStats[]>([]);
+  const [reportSections, setReportSections] = useState<ReportSection[]>([]);
 
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const workloadDropdownRef = useRef<HTMLDivElement>(null)
   const operationDropdownRef = useRef<HTMLDivElement>(null)
+  const ipDropdownRef = useRef<HTMLDivElement>(null)
 
   const riskyOps = [
     "UpdateInboxRule",
@@ -326,6 +350,9 @@ export default function UALTimelineBuilder() {
       }
       if (operationDropdownRef.current && !operationDropdownRef.current.contains(event.target as Node)) {
         setOperationDropdownOpen(false)
+      }
+      if (ipDropdownRef.current && !ipDropdownRef.current.contains(event.target as Node)) {
+        setIpDropdownOpen(false)
       }
     }
 
@@ -614,12 +641,22 @@ export default function UALTimelineBuilder() {
     );
   }, [operationOptions, operationSearchTerm]);
 
+  const ipOptions = useMemo(() => Array.from(new Set(logs.map((e) => e.ClientIP || e.ClientIPAddress).filter(Boolean))), [logs])
+
+  const filteredIpOptions = useMemo(() => {
+    if (!ipSearchTerm) return ipOptions;
+    return ipOptions.filter(ip => 
+      ip.toLowerCase().includes(ipSearchTerm.toLowerCase())
+    );
+  }, [ipOptions, ipSearchTerm]);
+
   const filteredLogs = useMemo(() => {
     return logs.filter((entry, index) => {
       // Multi-select filters - if no filters selected, show all
       const userMatch = userFilters.length === 0 || userFilters.includes(entry.UserId || entry.UserKey || '')
       const workloadMatch = workloadFilters.length === 0 || workloadFilters.includes(entry.Workload || '')
       const operationMatch = operationFilters.length === 0 || operationFilters.includes(entry.Operation || '')
+      const ipMatch = ipFilters.length === 0 || ipFilters.includes(entry.ClientIP || entry.ClientIPAddress || '')
 
       // Single-select filters
       const correlationMatch = correlationFilter ? entry.CorrelationId === correlationFilter : true
@@ -643,9 +680,9 @@ export default function UALTimelineBuilder() {
         );
       })();
 
-      return userMatch && workloadMatch && operationMatch && correlationMatch && riskyMatch && searchMatch
+      return userMatch && workloadMatch && operationMatch && ipMatch && correlationMatch && riskyMatch && searchMatch
     })
-  }, [logs, userFilters, workloadFilters, operationFilters, correlationFilter, showOnlyRisky, searchTerm, searchableFields])
+  }, [logs, userFilters, workloadFilters, operationFilters, ipFilters, correlationFilter, showOnlyRisky, searchTerm, searchableFields])
 
   const visibleLogs = filteredLogs.slice(0, visibleCount)
 
@@ -653,6 +690,7 @@ export default function UALTimelineBuilder() {
     setUserFilters([])
     setWorkloadFilters([])
     setOperationFilters([])
+    setIpFilters([])
     setCorrelationFilter("")
     setShowOnlyRisky(false)
     setSearchTerm("")
@@ -660,7 +698,7 @@ export default function UALTimelineBuilder() {
   }
 
   // Toggle a filter in a multi-select array
-  const toggleFilter = (type: "user" | "workload" | "operation", value: string) => {
+  const toggleFilter = (type: "user" | "workload" | "operation" | "ip", value: string) => {
     switch (type) {
       case "user":
         setUserFilters((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]))
@@ -671,6 +709,9 @@ export default function UALTimelineBuilder() {
       case "operation":
         setOperationFilters((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]))
         break
+      case "ip":
+        setIpFilters((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]))
+        break
     }
   }
 
@@ -679,6 +720,7 @@ export default function UALTimelineBuilder() {
     userFilters.length > 0 ||
     workloadFilters.length > 0 ||
     operationFilters.length > 0 ||
+    ipFilters.length > 0 ||
     correlationFilter ||
     showOnlyRisky ||
     searchTerm
@@ -1038,7 +1080,8 @@ export default function UALTimelineBuilder() {
   };
 
   const exportInvestigationTimeline = () => {
-    const htmlContent = `
+    // Create an HTML report
+    let report = `
       <!DOCTYPE html>
       <html>
         <head>
@@ -1115,6 +1158,36 @@ export default function UALTimelineBuilder() {
               border-top: 1px solid #e2e8f0;
               color: #64748b;
             }
+            .report-section {
+              margin-bottom: 2rem;
+              padding: 1rem;
+              background-color: #ffffff;
+              border: 1px solid #e2e8f0;
+              border-radius: 0.5rem;
+            }
+            .report-section h2 {
+              color: #1e293b;
+              margin-bottom: 1rem;
+              padding-bottom: 0.5rem;
+              border-bottom: 2px solid #e2e8f0;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin: 1rem 0;
+            }
+            th, td {
+              padding: 0.75rem;
+              text-align: left;
+              border-bottom: 1px solid #e2e8f0;
+            }
+            th {
+              background-color: #f8fafc;
+              font-weight: 600;
+            }
+            tr:hover {
+              background-color: #f8fafc;
+            }
           </style>
         </head>
         <body>
@@ -1122,34 +1195,81 @@ export default function UALTimelineBuilder() {
             <h1>Investigation Timeline Report</h1>
             <p>Generated on ${new Date().toLocaleString()}</p>
           </div>
-          ${timelineEvents.map(event => `
-            <div class="timeline-event ${event.type}">
-              <h3>${event.title}</h3>
-              <p>${event.description}</p>
-              <div class="timestamp">${formatDate(event.timestamp)}</div>
-              ${event.note ? `
-                <div class="analyst-note">
-                  <h4>Analyst Note</h4>
-                  <p>${event.note}</p>
-                </div>
-              ` : ''}
-            </div>
-          `).join('')}
-          <div class="footer">
-            <p>Generated by UAL Timeline Builder</p>
-          </div>
-        </body>
-      </html>
     `;
 
-    const blob = new Blob([htmlContent], { type: 'text/html' });
+    // Add report sections if any exist
+    if (reportSections.length > 0) {
+      report += `<div class="report-section">
+        <h2>Analysis Sections</h2>
+        ${reportSections.map(section => {
+          // Convert markdown table format to HTML table
+          const content = section.content.includes('| Field | Value |')
+            ? section.content
+                .split('\n')
+                .filter(line => line.trim() && !line.includes('---'))
+                .map(line => {
+                  if (line.startsWith('###')) {
+                    return `<h3>${line.replace('###', '').trim()}</h3>`;
+                  }
+                  const [field, value] = line.split('|').filter(s => s.trim());
+                  if (field && value) {
+                    return `<tr><th>${field.trim()}</th><td>${value.trim()}</td></tr>`;
+                  }
+                  return '';
+                })
+                .filter(line => line)
+                .join('\n')
+              : section.content;
+
+            return `
+              <div class="timeline-event">
+                <h3>${section.title}</h3>
+                <div>
+                  ${content.includes('<tr>') 
+                    ? `<table class="w-full border-collapse">
+                        ${content}
+                      </table>`
+                    : content}
+                </div>
+              </div>
+            `;
+          }).join('')}
+      </div>`;
+    }
+
+    // Add timeline events
+    report += `<div class="report-section">
+      <h2>Timeline Events</h2>
+      ${timelineEvents.map(event => `
+        <div class="timeline-event ${event.type}">
+          <h3>${event.title}</h3>
+          <p>${event.description}</p>
+          <div class="timestamp">${formatDate(event.timestamp)}</div>
+          ${event.note ? `
+            <div class="analyst-note">
+              <h4>Analyst Note</h4>
+              <p>${event.note}</p>
+            </div>
+          ` : ''}
+        </div>
+      `).join('')}
+    </div>`;
+
+    report += `
+      <div class="footer">
+        <p>Generated by UAL Timeline Builder</p>
+      </div>
+    </body>
+    </html>
+    `;
+
+    // Create and download the file
+    const blob = new Blob([report], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `investigation-timeline-${new Date().toISOString().split('T')[0]}.html`;
-    document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
@@ -1201,6 +1321,73 @@ export default function UALTimelineBuilder() {
   const toggleSortDirection = () => {
     setTimelineSortAsc(prev => !prev);
     setTimelineEvents(prev => sortTimelineEvents(prev, !timelineSortAsc));
+  };
+
+  const analyzeAuthenticationBaseline = () => {
+    // Create an object to store authentication statistics per IP and user
+    const authStats: Record<string, AuthenticationStats> = {};
+    
+    // List of successful authentication operations
+    const successfulAuthOperations = [
+      'UserLoggedIn',
+      'UserLoginSuccess',
+      'TeamsSignIn',
+      'ConsoleSignin',
+      'AzurePortalSignin'
+    ];
+
+    // Process each log entry
+    logs.forEach(entry => {
+      if (!successfulAuthOperations.includes(entry.Operation)) {
+        return;
+      }
+
+      const userId = entry.UserId;
+      const clientIP = entry.ClientIP || entry.ClientIPAddress || 
+        (typeof entry.AuditData === 'string' ? 
+          JSON.parse(entry.AuditData)?.ClientIPAddress : 
+          entry.AuditData?.ClientIPAddress);
+
+      if (!userId || !clientIP) {
+        return;
+      }
+
+      const key = `${clientIP}|${userId}`;
+      if (!authStats[key]) {
+        authStats[key] = {
+          ip: clientIP,
+          userId: userId,
+          count: 0,
+          firstSeen: entry.CreationDate,
+          lastSeen: entry.CreationDate,
+          operations: new Set<string>()
+        };
+      }
+
+      const stats = authStats[key];
+      stats.count += 1;
+      stats.operations.add(entry.Operation);
+      
+      // Update timestamps
+      if (new Date(entry.CreationDate) < new Date(stats.firstSeen)) {
+        stats.firstSeen = entry.CreationDate;
+      }
+      if (new Date(entry.CreationDate) > new Date(stats.lastSeen)) {
+        stats.lastSeen = entry.CreationDate;
+      }
+    });
+
+    // Convert object to array and sort by authentication count
+    const sortedData = Object.values(authStats)
+      .sort((a, b) => b.count - a.count);
+    
+    setAuthBaselineData(sortedData);
+    setShowAuthBaseline(true);
+  };
+
+  // Add modal close handler
+  const closeAuthBaselineModal = () => {
+    setShowAuthBaseline(false);
   };
 
   return (
@@ -1405,23 +1592,6 @@ export default function UALTimelineBuilder() {
                     <p className="text-slate-500 dark:text-gray-400 text-sm">{filteredLogs.length} events found</p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="Search logs..."
-                        onChange={(e) => debouncedSetSearchTerm(e.target.value)}
-                        className="pl-9 pr-4 py-2 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none transition-all"
-                      />
-                      {searchTerm && (
-                        <button
-                          onClick={() => setSearchTerm("")}
-                          className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-gray-300"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
                     <button
                       onClick={downloadInternetMessageIds}
                       className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-gray-600 text-white rounded-lg transition-colors text-sm"
@@ -1439,14 +1609,6 @@ export default function UALTimelineBuilder() {
                       <span className="text-xs text-slate-300 dark:text-slate-400">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
                     </button>
                     <button
-                      onClick={() => setShowIPExportModal(true)}
-                      className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
-                    >
-                      <MapPin className="h-3.5 w-3.5" />
-                      <span>Map IPs</span>
-                      <span className="text-xs text-blue-200">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
-                    </button>
-                    <button
                       onClick={downloadNDJSON}
                       className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-gray-600 text-white rounded-lg transition-colors text-sm"
                     >
@@ -1454,40 +1616,153 @@ export default function UALTimelineBuilder() {
                       <span>Export to NDJSON</span>
                       <span className="text-xs text-slate-300 dark:text-slate-400">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
                     </button>
+                    
+                    <button
+                      onClick={() => analyzeAuthenticationBaseline()}
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-blue-700 bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-200 dark:hover:bg-blue-800/60 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-slate-800"
+                    >
+                      <ChartBar className="h-4 w-4 mr-2 text-blue-600 dark:text-blue-400" />
+                      Auth Baseline
+                    </button>
                   </div>
                 </div>
 
+                {/* Authentication Baseline Analysis */}
+                {showAuthBaseline && (
+                  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-[95vw] max-w-6xl max-h-[90vh] flex flex-col">
+                      <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
+                        <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
+                          Authentication Baseline Analysis
+                        </h2>
+                        <button
+                          onClick={closeAuthBaselineModal}
+                          className="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                        >
+                          <X className="h-5 w-5" />
+                        </button>
+                      </div>
+                      
+                      <div className="flex-1 overflow-hidden p-4">
+                        <div className="h-full overflow-auto">
+                          <div className="min-w-full inline-block align-middle">
+                            <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                              <thead className="bg-slate-50 dark:bg-slate-800/50">
+                                <tr>
+                                  <th scope="col" className="w-[15%] px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">IP Address</th>
+                                  <th scope="col" className="w-[20%] px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">User ID</th>
+                                  <th scope="col" className="w-[10%] px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Auth Count</th>
+                                  <th scope="col" className="w-[15%] px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">First Seen</th>
+                                  <th scope="col" className="w-[15%] px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Last Seen</th>
+                                  <th scope="col" className="w-[15%] px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Operations</th>
+                                  <th scope="col" className="w-[10%] px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                                {authBaselineData.map((data, index) => (
+                                  <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white truncate max-w-[200px]" title={data.ip}>{data.ip}</td>
+                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white truncate max-w-[250px]" title={data.userId}>{data.userId}</td>
+                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white">{data.count}</td>
+                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white">{formatDate(data.firstSeen)}</td>
+                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white">{formatDate(data.lastSeen)}</td>
+                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white">
+                                      <div className="flex flex-wrap gap-1">
+                                        {Array.from(data.operations).map((op, i) => (
+                                          <span key={i} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                                            {op}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-sm">
+                                      <button
+                                        onClick={() => {
+                                          const baselineSection = {
+                                            title: `Authentication Pattern - ${data.userId}`,
+                                            content: `### \n\n| Field | Value |\n|-------|-------|\n| IP Address | ${data.ip} |\n| User ID | ${data.userId} |\n| Authentication Count | ${data.count} |\n| First Seen | ${data.firstSeen} |\n| Last Seen | ${data.lastSeen} |\n| Operations | ${Array.from(data.operations).join(', ')} |`
+                                          };
+                                          setReportSections([...reportSections, baselineSection]);
+                                          closeAuthBaselineModal();
+                                        }}
+                                        className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-blue-700 bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-200 dark:hover:bg-blue-800/60 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-slate-800"
+                                      >
+                                        <FileText className="h-4 w-4 mr-2 text-blue-600 dark:text-blue-400" />
+                                        Add to Report
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="flex justify-end p-4 border-t border-slate-200 dark:border-slate-700">
+                        <button
+                          onClick={closeAuthBaselineModal}
+                          className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-700"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Filters */}
-                <div className="bg-slate-50 dark:bg-gray-800 rounded-xl p-4 mb-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-medium flex items-center gap-2">
-                      <Filter className="h-4 w-4" />
-                      Filters
-                    </h3>
+                <div className="bg-slate-900/40 backdrop-blur-sm border border-slate-800/60 rounded-xl p-6 mb-6">
+                  <div className="flex items-center justify-between gap-4 mb-6">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium flex items-center gap-2 text-slate-200">
+                        <Filter className="h-4 w-4" />
+                        <span>Filters</span>
+                      </h3>
+                    </div>
+                    
+                    <div className="flex-1 max-w-md relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search logs..."
+                        onChange={(e) => debouncedSetSearchTerm(e.target.value)}
+                        className="pl-9 pr-4 py-2 w-full rounded-lg bg-slate-800/60 border border-slate-700/50 text-slate-200 placeholder-slate-400 focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none transition-all"
+                      />
+                      {searchTerm && (
+                        <button
+                          onClick={() => setSearchTerm("")}
+                          className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-300 transition-colors"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+
                     <button
                       onClick={resetFilters}
-                      className={`text-sm flex items-center gap-1 transition-colors ${
+                      className={`text-sm flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
                         hasActiveFilters
-                          ? "text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
-                          : "text-slate-400 dark:text-gray-400 cursor-not-allowed"
+                          ? "text-slate-200 hover:text-white bg-slate-700/50 hover:bg-slate-700/70"
+                          : "text-slate-400 cursor-not-allowed"
                       }`}
                       disabled={!hasActiveFilters}
                     >
-                      <RefreshCw className="h-3 w-3" />
+                      <RefreshCw className="h-3.5 w-3.5" />
                       Reset All
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     {/* Multi-select User dropdown */}
                     <div ref={userDropdownRef} className="relative">
-                      <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">Users</label>
+                      <label className="block text-sm font-medium text-slate-400 mb-1.5">Users</label>
                       <button
                         onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                        className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 transition-all ${
+                        className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
                           userFilters.length > 0
-                            ? "border-blue-500 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300"
-                            : "border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
+                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
                         }`}
                       >
                         <span className="truncate">
@@ -1503,23 +1778,23 @@ export default function UALTimelineBuilder() {
                       </button>
 
                       {userDropdownOpen && (
-                        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-700 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg max-h-60 overflow-auto">
-                          <div className="p-2 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-gray-700 z-10">
+                        <div className="absolute z-10 mt-1 w-full bg-slate-800 rounded-lg border border-slate-700 shadow-lg max-h-60 overflow-auto">
+                          <div className="p-2 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
                             <div className="flex items-center justify-between mb-2">
-                            <button
-                              onClick={() => setUserFilters([])}
-                              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                            >
-                              Clear all
-                            </button>
-                              <div className="relative">
+                              <button
+                                onClick={() => setUserFilters([])}
+                                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative flex-1 ml-4">
                                 <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
                                 <input
                                   type="text"
                                   placeholder="Search users..."
                                   value={userSearchTerm}
                                   onChange={(e) => setUserSearchTerm(e.target.value)}
-                                  className="pl-8 pr-2 py-1 text-xs w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-800 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none"
+                                  className="pl-7 pr-2 py-1 text-xs w-full rounded bg-slate-700/50 border border-slate-600/50 text-slate-200 placeholder-slate-400 focus:ring-1 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none"
                                 />
                               </div>
                             </div>
@@ -1528,15 +1803,15 @@ export default function UALTimelineBuilder() {
                             {filteredUserOptions.map((user) => (
                               <div
                                 key={user}
-                                className="flex items-center px-3 py-2 hover:bg-slate-100 dark:hover:bg-gray-600 rounded cursor-pointer"
+                                className="flex items-center px-3 py-2 hover:bg-slate-700/50 rounded cursor-pointer"
                                 onClick={() => toggleFilter("user", user)}
                               >
-                                <div className="mr-2 h-4 w-4 rounded border flex items-center justify-center border-slate-300 dark:border-slate-600">
+                                <div className="mr-2 h-4 w-4 rounded border border-slate-600 flex items-center justify-center">
                                   {userFilters.includes(user) && (
-                                    <Check className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                                    <Check className="h-3 w-3 text-blue-400" />
                                   )}
                                 </div>
-                                <span className="text-sm">{user}</span>
+                                <span className="text-sm text-slate-200">{user}</span>
                               </div>
                             ))}
                           </div>
@@ -1546,15 +1821,13 @@ export default function UALTimelineBuilder() {
 
                     {/* Multi-select Workload dropdown */}
                     <div ref={workloadDropdownRef} className="relative">
-                      <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">
-                        Workloads
-                      </label>
+                      <label className="block text-sm font-medium text-slate-400 mb-1.5">Workloads</label>
                       <button
                         onClick={() => setWorkloadDropdownOpen(!workloadDropdownOpen)}
-                        className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 transition-all ${
+                        className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
                           workloadFilters.length > 0
-                            ? "border-blue-500 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300"
-                            : "border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
+                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
                         }`}
                       >
                         <span className="truncate">
@@ -1570,23 +1843,23 @@ export default function UALTimelineBuilder() {
                       </button>
 
                       {workloadDropdownOpen && (
-                        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-700 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg max-h-60 overflow-auto">
-                          <div className="p-2 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-gray-700 z-10">
+                        <div className="absolute z-10 mt-1 w-full bg-slate-800 rounded-lg border border-slate-700 shadow-lg max-h-60 overflow-auto">
+                          <div className="p-2 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
                             <div className="flex items-center justify-between mb-2">
-                            <button
-                              onClick={() => setWorkloadFilters([])}
-                              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                            >
-                              Clear all
-                            </button>
-                              <div className="relative">
+                              <button
+                                onClick={() => setWorkloadFilters([])}
+                                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative flex-1 ml-4">
                                 <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
                                 <input
                                   type="text"
                                   placeholder="Search workloads..."
                                   value={workloadSearchTerm}
                                   onChange={(e) => setWorkloadSearchTerm(e.target.value)}
-                                  className="pl-8 pr-2 py-1 text-xs w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-800 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none"
+                                  className="pl-7 pr-2 py-1 text-xs w-full rounded bg-slate-700/50 border border-slate-600/50 text-slate-200 placeholder-slate-400 focus:ring-1 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none"
                                 />
                               </div>
                             </div>
@@ -1595,15 +1868,15 @@ export default function UALTimelineBuilder() {
                             {filteredWorkloadOptions.map((workload) => (
                               <div
                                 key={workload}
-                                className="flex items-center px-3 py-2 hover:bg-slate-100 dark:hover:bg-gray-600 rounded cursor-pointer"
+                                className="flex items-center px-3 py-2 hover:bg-slate-700/50 rounded cursor-pointer"
                                 onClick={() => toggleFilter("workload", workload)}
                               >
-                                <div className="mr-2 h-4 w-4 rounded border flex items-center justify-center border-slate-300 dark:border-slate-600">
+                                <div className="mr-2 h-4 w-4 rounded border border-slate-600 flex items-center justify-center">
                                   {workloadFilters.includes(workload) && (
-                                    <Check className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                                    <Check className="h-3 w-3 text-blue-400" />
                                   )}
                                 </div>
-                                <span className="text-sm">{workload}</span>
+                                <span className="text-sm text-slate-200">{workload}</span>
                               </div>
                             ))}
                           </div>
@@ -1613,15 +1886,13 @@ export default function UALTimelineBuilder() {
 
                     {/* Multi-select Operation dropdown */}
                     <div ref={operationDropdownRef} className="relative">
-                      <label className="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1">
-                        Operations
-                      </label>
+                      <label className="block text-sm font-medium text-slate-400 mb-1.5">Operations</label>
                       <button
                         onClick={() => setOperationDropdownOpen(!operationDropdownOpen)}
-                        className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 transition-all ${
+                        className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
                           operationFilters.length > 0
-                            ? "border-blue-500 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300"
-                            : "border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-700 text-slate-900 dark:text-gray-100"
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
+                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
                         }`}
                       >
                         <span className="truncate">
@@ -1637,23 +1908,23 @@ export default function UALTimelineBuilder() {
                       </button>
 
                       {operationDropdownOpen && (
-                        <div className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-700 rounded-lg border border-slate-200 dark:border-slate-700 shadow-lg max-h-60 overflow-auto">
-                          <div className="p-2 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-gray-700 z-10">
+                        <div className="absolute z-10 mt-1 w-full bg-slate-800 rounded-lg border border-slate-700 shadow-lg max-h-60 overflow-auto">
+                          <div className="p-2 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
                             <div className="flex items-center justify-between mb-2">
-                            <button
-                              onClick={() => setOperationFilters([])}
-                              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                            >
-                              Clear all
-                            </button>
-                              <div className="relative">
+                              <button
+                                onClick={() => setOperationFilters([])}
+                                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative flex-1 ml-4">
                                 <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
                                 <input
                                   type="text"
                                   placeholder="Search operations..."
                                   value={operationSearchTerm}
                                   onChange={(e) => setOperationSearchTerm(e.target.value)}
-                                  className="pl-8 pr-2 py-1 text-xs w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-gray-800 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 dark:focus:ring-blue-600 dark:focus:border-blue-600 outline-none"
+                                  className="pl-7 pr-2 py-1 text-xs w-full rounded bg-slate-700/50 border border-slate-600/50 text-slate-200 placeholder-slate-400 focus:ring-1 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none"
                                 />
                               </div>
                             </div>
@@ -1662,18 +1933,18 @@ export default function UALTimelineBuilder() {
                             {filteredOperationOptions.map((operation) => (
                               <div
                                 key={operation}
-                                className="flex items-center px-3 py-2 hover:bg-slate-100 dark:hover:bg-gray-600 rounded cursor-pointer"
+                                className="flex items-center px-3 py-2 hover:bg-slate-700/50 rounded cursor-pointer"
                                 onClick={() => toggleFilter("operation", operation)}
                               >
-                                <div className="mr-2 h-4 w-4 rounded border flex items-center justify-center border-slate-300 dark:border-slate-600">
+                                <div className="mr-2 h-4 w-4 rounded border border-slate-600 flex items-center justify-center">
                                   {operationFilters.includes(operation) && (
-                                    <Check className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                                    <Check className="h-3 w-3 text-blue-400" />
                                   )}
                                 </div>
-                                <span className="text-sm">
+                                <span className="text-sm text-slate-200">
                                   {operation}
                                   {riskyOps.includes(operation) && (
-                                    <span className="ml-2 inline-flex items-center text-xs font-medium text-red-600 dark:text-red-400">
+                                    <span className="ml-2 inline-flex items-center text-xs font-medium text-red-400">
                                       <AlertTriangle className="h-3 w-3 mr-1" />
                                       Risky
                                     </span>
@@ -1686,42 +1957,106 @@ export default function UALTimelineBuilder() {
                       )}
                     </div>
 
-                    {/* Risky Operations Toggle */}
-                    <div className="md:col-span-3">
-                      <label
-                        className={`flex items-center gap-2 w-full p-2 rounded-lg cursor-pointer transition-colors ${
-                          showOnlyRisky
-                            ? "bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300"
-                            : "hover:bg-slate-100 dark:hover:bg-gray-700"
+                    {/* Multi-select IP dropdown */}
+                    <div ref={ipDropdownRef} className="relative">
+                      <label className="block text-sm font-medium text-slate-400 mb-1.5">IP Addresses</label>
+                      <button
+                        onClick={() => setIpDropdownOpen(!ipDropdownOpen)}
+                        className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
+                          ipFilters.length > 0
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
+                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
                         }`}
                       >
-                        <div className="relative flex items-center">
-                          <input
-                            type="checkbox"
-                            checked={showOnlyRisky}
-                            onChange={(e) => setShowOnlyRisky(e.target.checked)}
-                            className="peer sr-only"
-                          />
-                          <div
-                            className={`h-5 w-5 rounded border transition-colors ${
-                              showOnlyRisky
-                                ? "bg-blue-600 border-blue-600 dark:bg-blue-600 dark:border-blue-600"
-                                : "border-slate-300 dark:border-slate-600"
-                            }`}
-                          ></div>
-                          <svg
-                            className="absolute h-3 w-3 text-white left-1 top-1 opacity-0 peer-checked:opacity-100 transition-opacity"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={3}
-                          >
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                          </svg>
+                        <span className="truncate">
+                          {ipFilters.length === 0
+                            ? "All IP Addresses"
+                            : ipFilters.length === 1
+                              ? ipFilters[0]
+                              : `${ipFilters.length} IPs selected`}
+                        </span>
+                        <ChevronDown
+                          className={`h-4 w-4 transition-transform ${ipDropdownOpen ? "rotate-180" : ""}`}
+                        />
+                      </button>
+
+                      {ipDropdownOpen && (
+                        <div className="absolute z-10 mt-1 w-full bg-slate-800 rounded-lg border border-slate-700 shadow-lg max-h-60 overflow-auto">
+                          <div className="p-2 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
+                            <div className="flex items-center justify-between mb-2">
+                              <button
+                                onClick={() => setIpFilters([])}
+                                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative flex-1 ml-4">
+                                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Search IPs..."
+                                  value={ipSearchTerm}
+                                  onChange={(e) => setIpSearchTerm(e.target.value)}
+                                  className="pl-7 pr-2 py-1 text-xs w-full rounded bg-slate-700/50 border border-slate-600/50 text-slate-200 placeholder-slate-400 focus:ring-1 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                          <div className="p-1">
+                            {filteredIpOptions.map((ip) => (
+                              <div
+                                key={ip}
+                                className="flex items-center px-3 py-2 hover:bg-slate-700/50 rounded cursor-pointer"
+                                onClick={() => toggleFilter("ip", ip)}
+                              >
+                                <div className="mr-2 h-4 w-4 rounded border border-slate-600 flex items-center justify-center">
+                                  {ipFilters.includes(ip) && (
+                                    <Check className="h-3 w-3 text-blue-400" />
+                                  )}
+                                </div>
+                                <span className="text-sm text-slate-200">{ip}</span>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                        <span className="text-sm font-medium">Show only risky operations</span>
-                      </label>
+                      )}
                     </div>
+                  </div>
+
+                  {/* Risky Operations Toggle */}
+                  <div className="mt-4">
+                    <label
+                      className={`flex items-center gap-2 w-full p-2 rounded-lg cursor-pointer transition-all ${
+                        showOnlyRisky
+                          ? "bg-blue-500/10 text-blue-400"
+                          : "hover:bg-slate-800/60"
+                      }`}
+                    >
+                      <div className="relative flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={showOnlyRisky}
+                          onChange={(e) => setShowOnlyRisky(e.target.checked)}
+                          className="peer sr-only"
+                        />
+                        <div
+                          className={`h-5 w-5 rounded border transition-colors ${
+                            showOnlyRisky
+                              ? "bg-blue-500 border-blue-500"
+                              : "border-slate-600"
+                          }`}
+                        ></div>
+                        <svg
+                          className="absolute h-3 w-3 text-slate-900 left-1 top-1 opacity-0 peer-checked:opacity-100 transition-opacity"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={3}
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <span className="text-sm font-medium text-slate-200">Show only risky operations</span>
+                    </label>
                   </div>
 
                   {/* Active Filter Chips */}
@@ -1730,12 +2065,12 @@ export default function UALTimelineBuilder() {
                       {userFilters.map((user) => (
                         <div
                           key={`user-${user}`}
-                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 rounded-full text-sm"
+                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20"
                         >
                           <span>User: {user}</span>
                           <button
                             onClick={() => toggleFilter("user", user)}
-                            className="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5"
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
                           >
                             <X className="h-3 w-3" />
                             <span className="sr-only">Remove user filter</span>
@@ -1746,12 +2081,12 @@ export default function UALTimelineBuilder() {
                       {workloadFilters.map((workload) => (
                         <div
                           key={`workload-${workload}`}
-                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 rounded-full text-sm"
+                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20"
                         >
                           <span>Workload: {workload}</span>
                           <button
                             onClick={() => toggleFilter("workload", workload)}
-                            className="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5"
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
                           >
                             <X className="h-3 w-3" />
                             <span className="sr-only">Remove workload filter</span>
@@ -1762,12 +2097,12 @@ export default function UALTimelineBuilder() {
                       {operationFilters.map((operation) => (
                         <div
                           key={`operation-${operation}`}
-                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 rounded-full text-sm"
+                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20"
                         >
                           <span>Operation: {operation}</span>
                           <button
                             onClick={() => toggleFilter("operation", operation)}
-                            className="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5"
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
                           >
                             <X className="h-3 w-3" />
                             <span className="sr-only">Remove operation filter</span>
@@ -1775,25 +2110,41 @@ export default function UALTimelineBuilder() {
                         </div>
                       ))}
 
+                      {ipFilters.map((ip) => (
+                        <div
+                          key={`ip-${ip}`}
+                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20"
+                        >
+                          <span>IP: {ip}</span>
+                          <button
+                            onClick={() => toggleFilter("ip", ip)}
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
+                          >
+                            <X className="h-3 w-3" />
+                            <span className="sr-only">Remove IP filter</span>
+                          </button>
+                        </div>
+                      ))}
+
                       {correlationFilter && (
-                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 rounded-full text-sm">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20">
                           <span>Correlation ID: {correlationFilter.substring(0, 10)}...</span>
                           <button
                             onClick={() => setCorrelationFilter("")}
-                            className="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5"
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
                           >
                             <X className="h-3 w-3" />
-                            <span className="sr-only">Remove correlation ID filter</span>
+                            <span className="sr-only">Remove correlation filter</span>
                           </button>
                         </div>
                       )}
 
                       {showOnlyRisky && (
-                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 rounded-full text-sm">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20">
                           <span>Risky Operations Only</span>
                           <button
                             onClick={() => setShowOnlyRisky(false)}
-                            className="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5"
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
                           >
                             <X className="h-3 w-3" />
                             <span className="sr-only">Remove risky operations filter</span>
@@ -1802,11 +2153,11 @@ export default function UALTimelineBuilder() {
                       )}
 
                       {searchTerm && (
-                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 rounded-full text-sm">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20">
                           <span>Search: {searchTerm}</span>
                           <button
                             onClick={() => setSearchTerm("")}
-                            className="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5"
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
                           >
                             <X className="h-3 w-3" />
                             <span className="sr-only">Remove search filter</span>
