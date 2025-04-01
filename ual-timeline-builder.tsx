@@ -223,6 +223,7 @@ export default function UALTimelineBuilder() {
   const [timelineEvents, setTimelineEvents] = useState<TimelineEntry[]>([]);
   const [showTimeline, setShowTimeline] = useState(false);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
+  const [timelineSortAsc, setTimelineSortAsc] = useState(true); // Add state for sort direction
 
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const workloadDropdownRef = useRef<HTMLDivElement>(null)
@@ -971,49 +972,39 @@ export default function UALTimelineBuilder() {
     }
   }
 
+  // Add a helper function for consistent timestamp parsing
+  const parseTimestamp = (timestamp: string) => {
+    try {
+      // Handle both formats and ensure proper timezone handling
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) {
+        // If direct parsing fails, try to parse the format: YYYY-MM-DDThh:mm:ss.000Z
+        const [datePart, timePart] = timestamp.split('T');
+        const [year, month, day] = datePart.split('-').map(Number);
+        const [hours, minutes, seconds] = timePart.split(':').map(n => parseInt(n));
+        return new Date(year, month - 1, day, hours, minutes, parseInt(seconds)).getTime();
+      }
+      return date.getTime();
+    } catch (e) {
+      console.warn('Failed to parse timestamp:', timestamp);
+      return 0; // Return earliest possible time if parsing fails
+    }
+  };
+
+  const sortTimelineEvents = (events: TimelineEntry[], ascending: boolean) => {
+    return [...events].sort((a, b) => {
+      const aTime = parseTimestamp(a.timestamp);
+      const bTime = parseTimestamp(b.timestamp);
+      return ascending ? aTime - bTime : bTime - aTime;
+    });
+  };
+
   // Add function to add event to timeline
   const addToTimeline = (entry: LogEntry, title: string, description: string, type: 'info' | 'warning' | 'error' = 'info') => {
-    // Check for duplicate events using multiple criteria
-    const isDuplicate = timelineEvents.some(existingEvent => {
-      const existingEntry = existingEvent.logEntry;
-      
-      // Check primary identifiers if they exist
-      if (entry.CorrelationId && existingEntry.CorrelationId === entry.CorrelationId &&
-          entry.Operation === existingEntry.Operation) {
-        return true;
-      }
-
-      // Check message-related operations
-      if (entry.MessageId && existingEntry.MessageId === entry.MessageId &&
-          entry.Operation === existingEntry.Operation) {
-        return true;
-      }
-
-      // Check rule-related operations
-      if (entry.RuleDetails && existingEntry.RuleDetails &&
-          entry.RuleDetails.Name === existingEntry.RuleDetails.Name &&
-          entry.Operation === existingEntry.Operation) {
-        return true;
-      }
-
-      // Check time and operation as fallback
-      if (entry.TimeGenerated && existingEntry.TimeGenerated === entry.TimeGenerated &&
-          entry.Operation === existingEntry.Operation &&
-          entry.UserId === existingEntry.UserId) {
-        return true;
-      }
-
-      return false;
-    });
-
-    if (isDuplicate) {
-      showNotification("This event is already in the timeline");
-      return;
-    }
-
     const newEvent: TimelineEntry = {
       id: Math.random().toString(36).substr(2, 9),
-      timestamp: entry.TimeGenerated || entry.CreationDate,
+      // Ensure consistent timestamp format
+      timestamp: entry.CreationDate || entry.TimeGenerated || new Date().toISOString(),
       title,
       description,
       type,
@@ -1021,11 +1012,10 @@ export default function UALTimelineBuilder() {
       note: ''
     };
 
-    setTimelineEvents(prev => [...prev, newEvent].sort((a, b) => 
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    ));
-    
-    showNotification("Event added to investigation");
+    setTimelineEvents(prevEvents => {
+      const updatedEvents = [...prevEvents, newEvent];
+      return sortTimelineEvents(updatedEvents, timelineSortAsc);
+    });
   };
 
   // Add function to remove event from timeline
@@ -1166,9 +1156,9 @@ export default function UALTimelineBuilder() {
   // Add after exportInvestigationTimeline function
   const saveTimeline = () => {
     const timelineData = {
-      version: "1.0",
+      version: '1.0',
       exportDate: new Date().toISOString(),
-      events: timelineEvents // notes are already included in the events
+      events: sortTimelineEvents(timelineEvents, timelineSortAsc)
     };
     
     const blob = new Blob([JSON.stringify(timelineData, null, 2)], { type: 'application/json' });
@@ -1189,56 +1179,28 @@ export default function UALTimelineBuilder() {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const timelineData = JSON.parse(event.target?.result as string);
+        const content = event.target?.result as string;
+        const timelineData = JSON.parse(content);
         
-        // Validate the timeline data structure
-        if (!timelineData || typeof timelineData !== 'object') {
-          throw new Error("Invalid timeline format");
+        if (timelineData.version === '1.0' && Array.isArray(timelineData.events)) {
+          const sortedEvents = sortTimelineEvents(timelineData.events, timelineSortAsc);
+          setTimelineEvents(sortedEvents);
+          showNotification('Timeline loaded successfully');
+        } else {
+          showNotification('Invalid timeline file format');
         }
-
-        // Check version
-        if (timelineData.version !== "1.0") {
-          throw new Error("Unsupported timeline version");
-        }
-
-        // Validate events array
-        if (!Array.isArray(timelineData.events)) {
-          throw new Error("Timeline events must be an array");
-        }
-
-        // Validate each event has required fields
-        const validEvents = timelineData.events.filter((event: any) => {
-          return (
-            event &&
-            typeof event === 'object' &&
-            typeof event.id === 'string' &&
-            typeof event.timestamp === 'string' &&
-            typeof event.title === 'string' &&
-            typeof event.description === 'string' &&
-            ['info', 'warning', 'error'].includes(event.type) &&
-            event.logEntry
-          );
-        });
-
-        if (validEvents.length !== timelineData.events.length) {
-          showNotification("Some events were invalid and were skipped");
-        }
-
-        // Update the timeline with valid events
-        setTimelineEvents(validEvents);
-        
-        // Show success message with event count
-        showNotification(`Loaded ${validEvents.length} events from timeline`);
-        
-        // Clear the file input so the same file can be loaded again
-        e.target.value = '';
       } catch (error) {
-        console.error("Error loading timeline:", error);
-        showNotification(`Error loading timeline: ${error instanceof Error ? error.message : 'Invalid file format'}`);
-        e.target.value = '';
+        console.error('Error loading timeline:', error);
+        showNotification('Error loading timeline file');
       }
     };
     reader.readAsText(file);
+  };
+
+  // Add a button to toggle sort direction in the timeline header
+  const toggleSortDirection = () => {
+    setTimelineSortAsc(prev => !prev);
+    setTimelineEvents(prev => sortTimelineEvents(prev, !timelineSortAsc));
   };
 
   return (
@@ -1290,6 +1252,14 @@ export default function UALTimelineBuilder() {
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Investigation Timeline</h2>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={toggleSortDirection}
+                    className="flex items-center gap-1 px-2 py-1 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded"
+                    title={timelineSortAsc ? "Oldest First" : "Newest First"}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    {timelineSortAsc ? "Oldest First" : "Newest First"}
+                  </button>
                   <button
                     onClick={exportInvestigationTimeline}
                     className="text-sm px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-md hover:bg-blue-100 dark:hover:bg-blue-900/50 flex items-center gap-1.5"
@@ -1859,7 +1829,7 @@ export default function UALTimelineBuilder() {
                   ) : (
                     visibleLogs.map((entry, i) => {
                       const isRisky = riskyOps.includes(entry.Operation)
-                      return (
+    return (
                         <div
                           key={i}
                           className={`
@@ -1885,7 +1855,7 @@ export default function UALTimelineBuilder() {
                                 </div>
                               )}
 
-                              <button
+            <button
                                 onClick={() => {
                                   const title = `${entry.Operation} by ${entry.UserId || entry.UserKey}`;
                                   let description = `Workload: ${entry.Workload}${entry.ClientIP ? `, IP: ${entry.ClientIP}` : ''}`;
