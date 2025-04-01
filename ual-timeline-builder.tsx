@@ -1712,7 +1712,7 @@ export default function UALTimelineBuilder() {
                 )}
 
                 {/* Filters */}
-                <div className="bg-slate-900/40 backdrop-blur-sm border border-slate-800/60 rounded-xl p-6 mb-6">
+                <div className="bg-white/80 dark:bg-slate-900/40 backdrop-blur-sm border border-slate-200/60 dark:border-slate-800/60 rounded-xl p-6 mb-6">
                   <div className="flex items-center justify-between gap-4 mb-6">
                     <div className="flex items-center gap-2">
                       <h3 className="font-medium flex items-center gap-2 text-slate-200">
@@ -1727,7 +1727,7 @@ export default function UALTimelineBuilder() {
                         type="text"
                         placeholder="Search logs..."
                         onChange={(e) => debouncedSetSearchTerm(e.target.value)}
-                        className="pl-9 pr-4 py-2 w-full rounded-lg bg-slate-800/60 border border-slate-700/50 text-slate-200 placeholder-slate-400 focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none transition-all"
+                        className="pl-9 pr-4 py-2 w-full rounded-lg bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 text-slate-900 dark:text-slate-200 placeholder:text-slate-500 dark:placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none transition-all"
                       />
                       {searchTerm && (
                         <button
@@ -1761,8 +1761,8 @@ export default function UALTimelineBuilder() {
                         onClick={() => setUserDropdownOpen(!userDropdownOpen)}
                         className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
                           userFilters.length > 0
-                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
-                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400"
+                            : "bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 text-slate-900 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600/50"
                         }`}
                       >
                         <span className="truncate">
@@ -1826,8 +1826,8 @@ export default function UALTimelineBuilder() {
                         onClick={() => setWorkloadDropdownOpen(!workloadDropdownOpen)}
                         className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
                           workloadFilters.length > 0
-                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
-                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400"
+                            : "bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 text-slate-900 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600/50"
                         }`}
                       >
                         <span className="truncate">
@@ -1891,8 +1891,8 @@ export default function UALTimelineBuilder() {
                         onClick={() => setOperationDropdownOpen(!operationDropdownOpen)}
                         className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
                           operationFilters.length > 0
-                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
-                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400"
+                            : "bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 text-slate-900 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600/50"
                         }`}
                       >
                         <span className="truncate">
@@ -1964,8 +1964,8 @@ export default function UALTimelineBuilder() {
                         onClick={() => setIpDropdownOpen(!ipDropdownOpen)}
                         className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
                           ipFilters.length > 0
-                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
-                            : "bg-slate-800/60 border border-slate-700/50 text-slate-200 hover:border-slate-600/50"
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400"
+                            : "bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 text-slate-900 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600/50"
                         }`}
                       >
                         <span className="truncate">
@@ -2252,13 +2252,19 @@ export default function UALTimelineBuilder() {
                                       console.warn("Failed to parse role assignment details:", e);
                                     }
                                   }
-                                  else if (entry.Operation === "Update application – Certificates and secrets management ") {
+                                  else if (entry.Operation === "Update application – Certificates and secrets management " || 
+                                          entry.Operation === "Add application." || 
+                                          entry.Operation === "Update application.") {
                                     try {
                                       const modifiedProps = typeof entry.ModifiedProperties === 'string' 
                                         ? JSON.parse(entry.ModifiedProperties)
                                         : entry.ModifiedProperties;
                                       
-                                      const keyDescriptionProp = modifiedProps.find((prop: any) => prop.Name === 'KeyDescription');
+                                      const keyDescriptionProp = modifiedProps.find((prop: any) => 
+                                        prop.Name === "KeyDescription" || 
+                                        prop.Name === "KeyDescriptions"
+                                      );
+                                      
                                       if (keyDescriptionProp) {
                                         const parseKeyList = (value: string) => {
                                           try {
@@ -2276,6 +2282,7 @@ export default function UALTimelineBuilder() {
                                               return null;
                                             }).filter(Boolean);
                                           } catch (e) {
+                                            console.warn('Failed to parse key list:', e);
                                             return [];
                                           }
                                         };
@@ -2302,6 +2309,7 @@ export default function UALTimelineBuilder() {
                                   }
 
                                   addToTimeline(entry, title, description, isRisky ? 'warning' : 'info');
+                                  showNotification(`Added ${entry.Operation} to timeline`);
                                 }}
                                 className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
                               >
