@@ -2028,8 +2028,8 @@ export default function UALTimelineBuilder() {
                     <label
                       className={`flex items-center gap-2 w-full p-2 rounded-lg cursor-pointer transition-all ${
                         showOnlyRisky
-                          ? "bg-blue-500/10 text-blue-400"
-                          : "hover:bg-slate-800/60"
+                          ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                          : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60"
                       }`}
                     >
                       <div className="relative flex items-center">
@@ -2043,11 +2043,13 @@ export default function UALTimelineBuilder() {
                           className={`h-5 w-5 rounded border transition-colors ${
                             showOnlyRisky
                               ? "bg-blue-500 border-blue-500"
-                              : "border-slate-600"
+                              : "bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600"
                           }`}
                         ></div>
                         <svg
-                          className="absolute h-3 w-3 text-slate-900 left-1 top-1 opacity-0 peer-checked:opacity-100 transition-opacity"
+                          className={`absolute h-3 w-3 left-1 top-1 opacity-0 peer-checked:opacity-100 transition-opacity ${
+                            showOnlyRisky ? "text-white" : "text-slate-900"
+                          }`}
                           viewBox="0 0 24 24"
                           stroke="currentColor"
                           strokeWidth={3}
@@ -2055,7 +2057,7 @@ export default function UALTimelineBuilder() {
                           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                         </svg>
                       </div>
-                      <span className="text-sm font-medium text-slate-200">Show only risky operations</span>
+                      <span className="text-sm font-medium">Show only risky operations</span>
                     </label>
                   </div>
 
