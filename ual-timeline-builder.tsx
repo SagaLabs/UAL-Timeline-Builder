@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useMemo, useRef, useEffect } from "react"
+import { useState, useMemo, useRef, useEffect, useCallback } from "react"
 import Papa from "papaparse"
 import {
   AlertTriangle,
@@ -215,6 +215,14 @@ interface ReportSection {
   content: string;
 }
 
+interface CaseInfo {
+  caseName: string;
+  caseNumber: string;
+  analystName: string;
+  analysisDate: string;
+  company: string;
+}
+
 export default function UALTimelineBuilder() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [fileNames, setFileNames] = useState<string[]>([])
@@ -230,6 +238,14 @@ export default function UALTimelineBuilder() {
   const [darkMode, setDarkMode, mounted] = useDarkMode()
   const [showToast, setShowToast] = useState(false)
   const [toastMessage, setToastMessage] = useState("")
+  const [showCaseInfoModal, setShowCaseInfoModal] = useState(false)
+  const [caseInfo, setCaseInfo] = useState<CaseInfo>({
+    caseName: "",
+    caseNumber: "",
+    analystName: "",
+    analysisDate: new Date().toISOString().split('T')[0],
+    company: ""
+  })
 
   const [userDropdownOpen, setUserDropdownOpen] = useState(false)
   const [workloadDropdownOpen, setWorkloadDropdownOpen] = useState(false)
@@ -247,6 +263,7 @@ export default function UALTimelineBuilder() {
   const [showAuthBaseline, setShowAuthBaseline] = useState(false);
   const [authBaselineData, setAuthBaselineData] = useState<AuthenticationStats[]>([]);
   const [reportSections, setReportSections] = useState<ReportSection[]>([]);
+  const [isDragging, setIsDragging] = useState(false)
 
   const userDropdownRef = useRef<HTMLDivElement>(null)
   const workloadDropdownRef = useRef<HTMLDivElement>(null)
@@ -256,6 +273,7 @@ export default function UALTimelineBuilder() {
   const riskyOps = [
     "UpdateInboxRule",
     "New-InboxRule",
+    "Remove-InboxRule",
     "Add-MailboxPermission",
     "Set-Mailbox",
     "Set-MailboxAutoReplyConfiguration",
@@ -459,29 +477,29 @@ export default function UALTimelineBuilder() {
     let processedCount = 0
 
     const processFile = (file: File) => {
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
           const data = results.data.map((entry: LogEntry) => {
             let auditData: AuditData = {}
-          try {
-              auditData = typeof entry.AuditData === 'string' ? JSON.parse(entry.AuditData) : entry.AuditData
-          } catch (err) {
-            console.warn("Failed to parse AuditData", err)
-          }
-          let ruleDetails = null
-          if (entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule") {
             try {
-              if (auditData.ModifiedProperties) {
-                ruleDetails = extractRuleDetails(auditData.ModifiedProperties)
-              } else if (auditData.Parameters) {
-                ruleDetails = extractRuleDetailsFromParameters(auditData.Parameters)
-              }
+              auditData = typeof entry.AuditData === 'string' ? JSON.parse(entry.AuditData) : entry.AuditData
             } catch (err) {
-              console.warn("Failed to parse rule details", err)
+              console.warn("Failed to parse AuditData", err)
             }
-          }
+            let ruleDetails = null
+            if (entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule" || entry.Operation === "Remove-InboxRule") {
+              try {
+                if (auditData.ModifiedProperties) {
+                  ruleDetails = extractRuleDetails(auditData.ModifiedProperties)
+                } else if (auditData.Parameters) {
+                  ruleDetails = extractRuleDetailsFromParameters(auditData.Parameters)
+                }
+              } catch (err) {
+                console.warn("Failed to parse rule details", err)
+              }
+            }
 
             // Parse User Agent if available
             let userAgentInfo: UserAgentInfo | undefined;
@@ -489,19 +507,19 @@ export default function UALTimelineBuilder() {
               userAgentInfo = parseUserAgent(auditData.UserAgent);
             }
 
-          return {
-            ...entry,
+            return {
+              ...entry,
               FileName: auditData.ObjectId ?? "",
               Subject: auditData.Subject ?? "",
               MessageId: auditData.MessageId ?? auditData.InternetMessageId ?? "",
-            TimeGenerated: entry.CreationDate,
+              TimeGenerated: entry.CreationDate,
               ClientIP: auditData.ClientIP ?? auditData.ClientIPAddress ?? "",
               CorrelationId: auditData.CorrelationId ?? auditData.CorrelationID ?? "",
-            ModifiedProperties: auditData.ModifiedProperties
-              ? JSON.stringify(auditData.ModifiedProperties, null, 2)
-              : "N/A",
+              ModifiedProperties: auditData.ModifiedProperties
+                ? JSON.stringify(auditData.ModifiedProperties, null, 2)
+                : "N/A",
               Workload: auditData.Workload ?? entry.Workload ?? "Unknown",
-            AuditDataRaw: entry.AuditData,
+              AuditDataRaw: entry.AuditData,
               RuleDetails: ruleDetails ?? undefined,
               UserAgent: auditData.UserAgent,
               UserAgentInfo: userAgentInfo
@@ -513,7 +531,7 @@ export default function UALTimelineBuilder() {
           // If all files are processed, update the state
           if (processedCount === files.length) {
             setLogs(allLogs)
-        setLoading(false)
+            setLoading(false)
           }
         },
         error: (error) => {
@@ -651,38 +669,62 @@ export default function UALTimelineBuilder() {
   }, [ipOptions, ipSearchTerm]);
 
   const filteredLogs = useMemo(() => {
-    return logs.filter((entry, index) => {
-      // Multi-select filters - if no filters selected, show all
-      const userMatch = userFilters.length === 0 || userFilters.includes(entry.UserId || entry.UserKey || '')
-      const workloadMatch = workloadFilters.length === 0 || workloadFilters.includes(entry.Workload || '')
-      const operationMatch = operationFilters.length === 0 || operationFilters.includes(entry.Operation || '')
-      const ipMatch = ipFilters.length === 0 || ipFilters.includes(entry.ClientIP || entry.ClientIPAddress || '')
+    return logs.filter(entry => {
+      // Skip if user filters are active and this entry doesn't match any selected user
+      if (userFilters.length > 0) {
+        const entryUser = entry.UserId || entry.UserKey;
+        if (!entryUser || !userFilters.includes(entryUser)) return false;
+      }
 
-      // Single-select filters
-      const correlationMatch = correlationFilter ? entry.CorrelationId === correlationFilter : true
-      const riskyMatch = showOnlyRisky ? riskyOps.includes(entry.Operation || '') : true
+      // Skip if workload filters are active and this entry doesn't match any selected workload
+      if (workloadFilters.length > 0) {
+        if (!entry.Workload || !workloadFilters.includes(entry.Workload)) return false;
+      }
 
-      // Optimized search functionality
-      const searchMatch = !searchTerm || (() => {
+      // Skip if operation filters are active and this entry doesn't match any selected operation
+      if (operationFilters.length > 0) {
+        if (!entry.Operation || !operationFilters.includes(entry.Operation)) return false;
+      }
+
+      // Skip if IP filters are active and this entry doesn't match any selected IP
+      if (ipFilters.length > 0) {
+        const entryIP = entry.ClientIP || entry.ClientIPAddress;
+        if (!entryIP || !ipFilters.includes(entryIP)) return false;
+      }
+
+      // Skip if correlation filter is active and this entry doesn't match
+      if (correlationFilter) {
+        if (!entry.CorrelationId || !entry.CorrelationId.includes(correlationFilter)) return false;
+      }
+
+      // Skip if showOnlyRisky is true and this entry isn't risky
+      if (showOnlyRisky) {
+        if (!riskyOps.includes(entry.Operation)) return false;
+      }
+
+      // Skip if search term is active and this entry doesn't match
+      if (searchTerm) {
         const searchLower = searchTerm.toLowerCase();
-        const searchableEntry = searchableFields[index];
-        
         return (
-          searchableEntry.id.toLowerCase().includes(searchLower) ||
-          searchableEntry.operation.toLowerCase().includes(searchLower) ||
-          searchableEntry.workload.toLowerCase().includes(searchLower) ||
-          searchableEntry.subject.toLowerCase().includes(searchLower) ||
-          searchableEntry.messageId.toLowerCase().includes(searchLower) ||
-          searchableEntry.correlationId.toLowerCase().includes(searchLower) ||
-          searchableEntry.clientIP.toLowerCase().includes(searchLower) ||
-          searchableEntry.fileName.toLowerCase().includes(searchLower) ||
-          searchableEntry.userAgent.toLowerCase().includes(searchLower)
+          (entry.UserId?.toLowerCase().includes(searchLower) || entry.UserKey?.toLowerCase().includes(searchLower)) ||
+          entry.Operation?.toLowerCase().includes(searchLower) ||
+          entry.Workload?.toLowerCase().includes(searchLower) ||
+          entry.Subject?.toLowerCase().includes(searchLower) ||
+          entry.MessageId?.toLowerCase().includes(searchLower) ||
+          entry.CorrelationId?.toLowerCase().includes(searchLower) ||
+          (entry.ClientIP || entry.ClientIPAddress)?.toLowerCase().includes(searchLower) ||
+          entry.FileName?.toLowerCase().includes(searchLower) ||
+          entry.UserAgent?.toLowerCase().includes(searchLower)
         );
-      })();
+      }
 
-      return userMatch && workloadMatch && operationMatch && ipMatch && correlationMatch && riskyMatch && searchMatch
-    })
-  }, [logs, userFilters, workloadFilters, operationFilters, ipFilters, correlationFilter, showOnlyRisky, searchTerm, searchableFields])
+      // Skip if entry is from NT AUTHORITY\SYSTEM
+      const entryUser = entry.UserId || entry.UserKey;
+      if (entryUser && entryUser.includes('NT AUTHORITY\\SYSTEM')) return false;
+
+      return true;
+    });
+  }, [logs, userFilters, workloadFilters, operationFilters, ipFilters, correlationFilter, showOnlyRisky, searchTerm]);
 
   const visibleLogs = filteredLogs.slice(0, visibleCount)
 
@@ -738,8 +780,8 @@ export default function UALTimelineBuilder() {
   }
 
   const downloadInternetMessageIds = () => {
-    // Create a map to store message IDs and their details
-    const messageStats = new Map<string, {
+    // Create an interface for message statistics
+    interface MessageStats {
       readBy: Set<string>;
       readAt: string[];
       subject: string;
@@ -747,7 +789,10 @@ export default function UALTimelineBuilder() {
       clientIP: string;
       folderPath: string;
       sizeInBytes: number;
-    }>();
+    }
+
+    // Use a Record instead of Map
+    const messageStats: Record<string, MessageStats> = {};
 
     // Process each log entry
     logs.forEach(entry => {
@@ -764,40 +809,41 @@ export default function UALTimelineBuilder() {
             if (folder.FolderItems && Array.isArray(folder.FolderItems)) {
               folder.FolderItems.forEach((item: any) => {
                 if (item.InternetMessageId && item.InternetMessageId.match(/<[^>]+@[^>]+>/)) {
-                  const existing = messageStats.get(item.InternetMessageId) || {
-                    readBy: new Set<string>(),
-                    readAt: [],
-                    subject: entry.Subject || 'N/A',
-                    workload: entry.Workload || 'Unknown',
-                    clientIP: entry.ClientIP || 'N/A',
-                    folderPath: folder.Path || 'Unknown',
-                    sizeInBytes: item.SizeInBytes || 0
-                  };
+                  const messageId = item.InternetMessageId;
+                  if (!messageStats[messageId]) {
+                    messageStats[messageId] = {
+                      readBy: new Set<string>(),
+                      readAt: [],
+                      subject: entry.Subject || 'N/A',
+                      workload: entry.Workload || 'Unknown',
+                      clientIP: entry.ClientIP || 'N/A',
+                      folderPath: folder.Path || 'Unknown',
+                      sizeInBytes: item.SizeInBytes || 0
+                    };
+                  }
 
                   // Add user who read the message
                   if (entry.UserId || entry.UserKey) {
-                    existing.readBy.add(entry.UserId || entry.UserKey);
+                    messageStats[messageId].readBy.add(entry.UserId || entry.UserKey);
                   }
 
                   // Add read timestamp
                   if (entry.TimeGenerated) {
-                    existing.readAt.push(entry.TimeGenerated);
+                    messageStats[messageId].readAt.push(entry.TimeGenerated);
                   }
-
-                  messageStats.set(item.InternetMessageId, existing);
                 }
               });
             }
           });
         }
       } catch (e) {
-        console.warn("Error processing log entry:", e);
+        console.warn("Failed to process log entry:", e);
       }
     });
 
     // Convert to CSV format
     const csvRows = ['InternetMessageId,Subject,Workload,Read By,Read Timestamps,Client IP,Folder Path,Size (Bytes)'];
-    messageStats.forEach((data, messageId) => {
+    Object.entries(messageStats).forEach(([messageId, data]) => {
       const readBy = Array.from(data.readBy).join('; ');
       const readAt = data.readAt.join('; ');
       csvRows.push(`"${messageId}","${data.subject}","${data.workload}","${readBy}","${readAt}","${data.clientIP}","${data.folderPath}",${data.sizeInBytes}`);
@@ -809,92 +855,7 @@ export default function UALTimelineBuilder() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'internet-message-ids.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadIPStats = () => {
-    // Define login operations
-    const loginOperations = [
-      "UserLoggedIn",
-      "SignIn",
-      "UserLoginFailed",
-      "UserLoginSuccess"
-    ];
-
-    // Create a map to store IP statistics
-    const ipStats = new Map<string, {
-      users: Set<string>;
-      timestamps: string[];
-      operations: Set<string>;
-      workloads: Set<string>;
-    }>();
-
-    // Process each log entry
-    logs.forEach(entry => {
-      // Only process login operations
-      if (!loginOperations.includes(entry.Operation)) return;
-
-      // Skip if user filters are active and this entry doesn't match any selected user
-      if (userFilters.length > 0) {
-        const entryUser = entry.UserId || entry.UserKey;
-        if (!entryUser || !userFilters.includes(entryUser)) return;
-      }
-
-      const ip = entry.ClientIP;
-      if (!ip) return;
-
-      const existing = ipStats.get(ip) || {
-        users: new Set<string>(),
-        timestamps: [],
-        operations: new Set<string>(),
-        workloads: new Set<string>()
-      };
-
-      // Add user
-      if (entry.UserId || entry.UserKey) {
-        existing.users.add(entry.UserId || entry.UserKey);
-      }
-
-      // Add timestamp
-      if (entry.TimeGenerated) {
-        existing.timestamps.push(entry.TimeGenerated);
-      }
-
-      // Add operation
-      if (entry.Operation) {
-        existing.operations.add(entry.Operation);
-      }
-
-      // Add workload
-      if (entry.Workload) {
-        existing.workloads.add(entry.Workload);
-      }
-
-      ipStats.set(ip, existing);
-    });
-
-    // Convert to CSV format
-    const csvRows = ['IP Address,Users,First Seen,Last Seen,Operations,Workloads'];
-    ipStats.forEach((data, ip) => {
-      const users = Array.from(data.users).join('; ');
-      const timestamps = data.timestamps.sort();
-      const firstSeen = timestamps[0] || 'N/A';
-      const lastSeen = timestamps[timestamps.length - 1] || 'N/A';
-      const operations = Array.from(data.operations).join('; ');
-      const workloads = Array.from(data.workloads).join('; ');
-      
-      csvRows.push(`"${ip}","${users}","${firstSeen}","${lastSeen}","${operations}","${workloads}"`);
-    });
-
-    // Create and download the file
-    const csvContent = csvRows.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'ip-login-stats.csv';
+    a.download = 'mail-activity.csv';
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1095,6 +1056,33 @@ export default function UALTimelineBuilder() {
               margin: 0 auto;
               padding: 2rem;
             }
+            .case-info {
+              margin-bottom: 2rem;
+              padding: 1rem;
+              background-color: #f8fafc;
+              border: 1px solid #e2e8f0;
+              border-radius: 0.5rem;
+            }
+            .case-info h2 {
+              color: #1e293b;
+              margin-bottom: 1rem;
+              padding-bottom: 0.5rem;
+              border-bottom: 2px solid #e2e8f0;
+            }
+            .case-info table {
+              width: 100%;
+              border-collapse: collapse;
+            }
+            .case-info th, .case-info td {
+              padding: 0.75rem;
+              text-align: left;
+              border-bottom: 1px solid #e2e8f0;
+            }
+            .case-info th {
+              width: 30%;
+              background-color: #f8fafc;
+              font-weight: 600;
+            }
             .timeline-event {
               margin-bottom: 2rem;
               padding: 1rem;
@@ -1188,12 +1176,56 @@ export default function UALTimelineBuilder() {
             tr:hover {
               background-color: #f8fafc;
             }
+            .inbox-rule {
+              margin-top: 1rem;
+              padding: 1rem;
+              background-color: #fffbeb;
+              border: 1px solid #fef3c7;
+              border-radius: 0.375rem;
+            }
+            .inbox-rule h4 {
+              color: #92400e;
+              margin: 0 0 0.5rem 0;
+            }
+            .inbox-rule ul {
+              margin: 0;
+              padding-left: 1.5rem;
+            }
+            .inbox-rule li {
+              margin: 0.25rem 0;
+            }
           </style>
         </head>
         <body>
           <div class="header">
             <h1>Investigation Timeline Report</h1>
             <p>Generated on ${new Date().toLocaleString()}</p>
+          </div>
+
+          <div class="case-info">
+            <h2>Case Information</h2>
+            <table>
+              <tr>
+                <th>Case Name:</th>
+                <td>${caseInfo.caseName || 'Not specified'}</td>
+              </tr>
+              <tr>
+                <th>Case Number:</th>
+                <td>${caseInfo.caseNumber || 'Not specified'}</td>
+              </tr>
+              <tr>
+                <th>Analyst:</th>
+                <td>${caseInfo.analystName || 'Not specified'}</td>
+              </tr>
+              <tr>
+                <th>Analysis Date:</th>
+                <td>${caseInfo.analysisDate || 'Not specified'}</td>
+              </tr>
+              <tr>
+                <th>Company:</th>
+                <td>${caseInfo.company || 'Not specified'}</td>
+              </tr>
+            </table>
           </div>
     `;
 
@@ -1217,7 +1249,6 @@ export default function UALTimelineBuilder() {
                   }
                   return '';
                 })
-                .filter(line => line)
                 .join('\n')
               : section.content;
 
@@ -1240,19 +1271,51 @@ export default function UALTimelineBuilder() {
     // Add timeline events
     report += `<div class="report-section">
       <h2>Timeline Events</h2>
-      ${timelineEvents.map(event => `
-        <div class="timeline-event ${event.type}">
-          <h3>${event.title}</h3>
-          <p>${event.description}</p>
-          <div class="timestamp">${formatDate(event.timestamp)}</div>
-          ${event.note ? `
-            <div class="analyst-note">
-              <h4>Analyst Note</h4>
-              <p>${event.note}</p>
+      ${timelineEvents.map(event => {
+        let eventContent = `
+          <div class="timeline-event ${event.type}">
+            <h3>${event.title}</h3>
+            <p>${event.description}</p>
+        `;
+
+        // Add inbox rule details if present
+        if (event.logEntry.RuleDetails) {
+          eventContent += `
+            <div class="inbox-rule">
+              <h4>Inbox Rule Details</h4>
+              <p><strong>Rule Name:</strong> ${event.logEntry.RuleDetails.Name}</p>
+              <p><strong>Status:</strong> ${event.logEntry.RuleDetails.Enabled ? 'Enabled' : 'Disabled'}</p>
+              ${event.logEntry.RuleDetails.Priority ? `<p><strong>Priority:</strong> ${event.logEntry.RuleDetails.Priority}</p>` : ''}
+              ${event.logEntry.RuleDetails.StopProcessingRules ? '<p><strong>Stop Processing Rules:</strong> Yes</p>' : ''}
+              ${event.logEntry.RuleDetails.Conditions.length > 0 ? `
+                <p><strong>Conditions:</strong></p>
+                <ul>
+                  ${event.logEntry.RuleDetails.Conditions.map(condition => `<li>${condition}</li>`).join('')}
+                </ul>
+              ` : ''}
+              ${event.logEntry.RuleDetails.Actions.length > 0 ? `
+                <p><strong>Actions:</strong></p>
+                <ul>
+                  ${event.logEntry.RuleDetails.Actions.map(action => `<li>${action}</li>`).join('')}
+                </ul>
+              ` : ''}
             </div>
-          ` : ''}
-        </div>
-      `).join('')}
+          `;
+        }
+
+        eventContent += `
+            <div class="timestamp">${formatDate(event.timestamp)}</div>
+            ${event.note ? `
+              <div class="analyst-note">
+                <h4>Analyst Note</h4>
+                <p>${event.note}</p>
+              </div>
+            ` : ''}
+          </div>
+        `;
+
+        return eventContent;
+      }).join('')}
     </div>`;
 
     report += `
@@ -1390,6 +1453,131 @@ export default function UALTimelineBuilder() {
     setShowAuthBaseline(false);
   };
 
+  const handleCaseInfoChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setCaseInfo(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  }, []);
+
+  const handleCaseInfoSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setShowCaseInfoModal(false);
+    showNotification("Case information updated");
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+
+    // Check if all files are CSV
+    if (!files.every(file => file.name.endsWith(".csv"))) {
+      alert("Only .csv files are supported.")
+      return
+    }
+
+    setLoading(true)
+    setFileNames(files.map(f => f.name))
+
+    // Process files sequentially
+    let allLogs: LogEntry[] = []
+    let processedCount = 0
+
+    const processFile = (file: File) => {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const data = results.data.map((entry: LogEntry) => {
+            let auditData: AuditData = {}
+            try {
+              auditData = typeof entry.AuditData === 'string' ? JSON.parse(entry.AuditData) : entry.AuditData
+            } catch (err) {
+              console.warn("Failed to parse AuditData", err)
+            }
+            let ruleDetails = null
+            if (entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule" || entry.Operation === "Remove-InboxRule") {
+              try {
+                if (auditData.ModifiedProperties) {
+                  ruleDetails = extractRuleDetails(auditData.ModifiedProperties)
+                } else if (auditData.Parameters) {
+                  ruleDetails = extractRuleDetailsFromParameters(auditData.Parameters)
+                }
+              } catch (err) {
+                console.warn("Failed to parse rule details", err)
+              }
+            }
+
+            // Parse User Agent if available
+            let userAgentInfo: UserAgentInfo | undefined;
+            if (auditData.UserAgent) {
+              userAgentInfo = parseUserAgent(auditData.UserAgent);
+            }
+
+            return {
+              ...entry,
+              FileName: auditData.ObjectId ?? "",
+              Subject: auditData.Subject ?? "",
+              MessageId: auditData.MessageId ?? auditData.InternetMessageId ?? "",
+              TimeGenerated: entry.CreationDate,
+              ClientIP: auditData.ClientIP ?? auditData.ClientIPAddress ?? "",
+              CorrelationId: auditData.CorrelationId ?? auditData.CorrelationID ?? "",
+              ModifiedProperties: auditData.ModifiedProperties
+                ? JSON.stringify(auditData.ModifiedProperties, null, 2)
+                : "N/A",
+              Workload: auditData.Workload ?? entry.Workload ?? "Unknown",
+              AuditDataRaw: entry.AuditData,
+              RuleDetails: ruleDetails ?? undefined,
+              UserAgent: auditData.UserAgent,
+              UserAgentInfo: userAgentInfo
+            }
+          })
+          allLogs = [...allLogs, ...data]
+          processedCount++
+
+          // If all files are processed, update the state
+          if (processedCount === files.length) {
+            setLogs(allLogs)
+            setLoading(false)
+          }
+        },
+        error: (error) => {
+          console.error("Error parsing file:", error)
+          processedCount++
+          if (processedCount === files.length) {
+            setLogs(allLogs)
+            setLoading(false)
+          }
+        }
+      })
+    }
+
+    // Process each file
+    files.forEach(processFile)
+  }
+
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 p-4 md:p-6">
       {/* Toast Notification */}
@@ -1397,6 +1585,96 @@ export default function UALTimelineBuilder() {
         <div className="fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50 animate-fade-in-up">
           <Check className="h-4 w-4" />
           <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Case Info Modal */}
+      {showCaseInfoModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">Case Information</h2>
+              <form onSubmit={handleCaseInfoSubmit}>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Case Name
+                    </label>
+                    <input
+                      type="text"
+                      name="caseName"
+                      value={caseInfo.caseName}
+                      onChange={handleCaseInfoChange}
+                      className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-gray-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Case Number
+                    </label>
+                    <input
+                      type="text"
+                      name="caseNumber"
+                      value={caseInfo.caseNumber}
+                      onChange={handleCaseInfoChange}
+                      className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-gray-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Analyst Name
+                    </label>
+                    <input
+                      type="text"
+                      name="analystName"
+                      value={caseInfo.analystName}
+                      onChange={handleCaseInfoChange}
+                      className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-gray-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Analysis Date
+                    </label>
+                    <input
+                      type="date"
+                      name="analysisDate"
+                      value={caseInfo.analysisDate}
+                      onChange={handleCaseInfoChange}
+                      className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-gray-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                      Company
+                    </label>
+                    <input
+                      type="text"
+                      name="company"
+                      value={caseInfo.company}
+                      onChange={handleCaseInfoChange}
+                      className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md bg-white dark:bg-gray-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowCaseInfoModal(false)}
+                    className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-600 dark:hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1446,6 +1724,13 @@ export default function UALTimelineBuilder() {
                   >
                     <RefreshCw className="h-4 w-4" />
                     {timelineSortAsc ? "Oldest First" : "Newest First"}
+                  </button>
+                  <button
+                    onClick={() => setShowCaseInfoModal(true)}
+                    className="text-sm px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center gap-1.5"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Case Info
                   </button>
                   <button
                     onClick={exportInvestigationTimeline}
@@ -1553,11 +1838,21 @@ export default function UALTimelineBuilder() {
 
         {/* Upload Section */}
         <div className="p-6 border-b border-slate-200 dark:border-gray-700">
-          <div className="bg-slate-50 dark:bg-gray-800 rounded-xl p-6 border border-slate-200 dark:border-gray-700 transition-all hover:border-blue-300 dark:hover:border-blue-700">
+          <div 
+            className={`bg-slate-50 dark:bg-gray-800 rounded-xl p-6 border border-slate-200 dark:border-gray-700 transition-all hover:border-blue-300 dark:hover:border-blue-700 ${
+              isDragging ? 'border-blue-500 dark:border-blue-500 bg-blue-50 dark:bg-blue-900/20' : ''
+            }`}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
             <div className="flex flex-col md:flex-row md:items-center gap-4">
               <div className="flex-1">
                 <h2 className="text-lg font-semibold mb-1">Upload Audit Log</h2>
-                <p className="text-slate-500 dark:text-gray-400 text-sm">Select a CSV file containing UAL data</p>
+                <p className="text-slate-500 dark:text-gray-400 text-sm">
+                  {isDragging ? 'Drop your CSV files here' : 'Drag and drop or select CSV files containing UAL data'}
+                </p>
               </div>
               <div className="flex-shrink-0">
                 <label className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg cursor-pointer transition-colors">
@@ -1598,14 +1893,6 @@ export default function UALTimelineBuilder() {
                     >
                       <Mail className="h-3.5 w-3.5" />
                       <span>Export Mail Activity</span>
-                      <span className="text-xs text-slate-300 dark:text-slate-400">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
-                    </button>
-                    <button
-                      onClick={downloadIPStats}
-                      className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-gray-600 text-white rounded-lg transition-colors text-sm"
-                    >
-                      <Globe className="h-3.5 w-3.5" />
-                      <span>Export IP Stats</span>
                       <span className="text-xs text-slate-300 dark:text-slate-400">{userFilters.length > 0 ? `${userFilters.length} users` : 'all users'}</span>
                     </button>
                     <button
@@ -1661,7 +1948,17 @@ export default function UALTimelineBuilder() {
                               <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                                 {authBaselineData.map((data, index) => (
                                   <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white truncate max-w-[200px]" title={data.ip}>{data.ip}</td>
+                                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white truncate max-w-[200px]" title={data.ip}>
+                                      <button
+                                        onClick={() => {
+                                          toggleFilter("ip", data.ip);
+                                          closeAuthBaselineModal();
+                                        }}
+                                        className="text-blue-600 dark:text-blue-400 hover:underline"
+                                      >
+                                        {data.ip}
+                                      </button>
+                                    </td>
                                     <td className="px-4 py-3 text-sm text-slate-900 dark:text-white truncate max-w-[250px]" title={data.userId}>{data.userId}</td>
                                     <td className="px-4 py-3 text-sm text-slate-900 dark:text-white">{data.count}</td>
                                     <td className="px-4 py-3 text-sm text-slate-900 dark:text-white">{formatDate(data.firstSeen)}</td>
@@ -2230,7 +2527,7 @@ export default function UALTimelineBuilder() {
                                       console.warn("Failed to parse user creation details:", e);
                                     }
                                   } 
-                                  else if (entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule") {
+                                  else if (entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule" || entry.Operation === "Remove-InboxRule") {
                                     if (entry.RuleDetails) {
                                       description += `\nRule Name: ${entry.RuleDetails.Name}`;
                                       if (entry.RuleDetails.Actions?.length) {
@@ -2372,7 +2669,7 @@ export default function UALTimelineBuilder() {
                               </div>
                             </div>
   {/* Special display for inbox rules */}
-  {(entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule") &&
+  {(entry.Operation === "UpdateInboxRule" || entry.Operation === "New-InboxRule" || entry.Operation === "Remove-InboxRule") &&
                               entry.RuleDetails && (
                                 <div className="mt-3 mb-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
                                   <h4 className="font-bold text-yellow-800 dark:text-yellow-300 mb-2 flex items-center gap-2">
