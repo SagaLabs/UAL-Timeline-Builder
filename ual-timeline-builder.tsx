@@ -668,6 +668,25 @@ export default function UALTimelineBuilder() {
     );
   }, [ipOptions, ipSearchTerm]);
 
+  // Add a helper function for consistent timestamp parsing
+  const parseTimestamp = (timestamp: string) => {
+    try {
+      // Handle both formats and ensure proper timezone handling
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) {
+        // If direct parsing fails, try to parse the format: YYYY-MM-DDThh:mm:ss.000Z
+        const [datePart, timePart] = timestamp.split('T');
+        const [year, month, day] = datePart.split('-').map(Number);
+        const [hours, minutes, seconds] = timePart.split(':').map(n => parseInt(n));
+        return new Date(year, month - 1, day, hours, minutes, parseInt(seconds)).getTime();
+      }
+      return date.getTime();
+    } catch (e) {
+      console.warn('Failed to parse timestamp:', timestamp);
+      return 0; // Return earliest possible time if parsing fails
+    }
+  };
+
   const filteredLogs = useMemo(() => {
     return logs.filter(entry => {
       // Skip if user filters are active and this entry doesn't match any selected user
@@ -723,6 +742,10 @@ export default function UALTimelineBuilder() {
       if (entryUser && entryUser.includes('NT AUTHORITY\\SYSTEM')) return false;
 
       return true;
+    }).sort((a, b) => {
+      const aTime = parseTimestamp(a.CreationDate || a.TimeGenerated || '');
+      const bTime = parseTimestamp(b.CreationDate || b.TimeGenerated || '');
+      return bTime - aTime; // Sort in descending order (newest first)
     });
   }, [logs, userFilters, workloadFilters, operationFilters, ipFilters, correlationFilter, showOnlyRisky, searchTerm]);
 
@@ -975,25 +998,6 @@ export default function UALTimelineBuilder() {
     }
   }
 
-  // Add a helper function for consistent timestamp parsing
-  const parseTimestamp = (timestamp: string) => {
-    try {
-      // Handle both formats and ensure proper timezone handling
-      const date = new Date(timestamp);
-      if (isNaN(date.getTime())) {
-        // If direct parsing fails, try to parse the format: YYYY-MM-DDThh:mm:ss.000Z
-        const [datePart, timePart] = timestamp.split('T');
-        const [year, month, day] = datePart.split('-').map(Number);
-        const [hours, minutes, seconds] = timePart.split(':').map(n => parseInt(n));
-        return new Date(year, month - 1, day, hours, minutes, parseInt(seconds)).getTime();
-      }
-      return date.getTime();
-    } catch (e) {
-      console.warn('Failed to parse timestamp:', timestamp);
-      return 0; // Return earliest possible time if parsing fails
-    }
-  };
-
   const sortTimelineEvents = (events: TimelineEntry[], ascending: boolean) => {
     return [...events].sort((a, b) => {
       const aTime = parseTimestamp(a.timestamp);
@@ -1016,6 +1020,18 @@ export default function UALTimelineBuilder() {
     };
 
     setTimelineEvents(prevEvents => {
+      // Check if an event with the same timestamp, title, and description already exists
+      const isDuplicate = prevEvents.some(event => 
+        event.timestamp === newEvent.timestamp && 
+        event.title === newEvent.title && 
+        event.description === newEvent.description
+      );
+
+      if (isDuplicate) {
+        showNotification('This event is already in the timeline');
+        return prevEvents;
+      }
+
       const updatedEvents = [...prevEvents, newEvent];
       return sortTimelineEvents(updatedEvents, timelineSortAsc);
     });
