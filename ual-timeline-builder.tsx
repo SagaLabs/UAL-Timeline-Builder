@@ -884,27 +884,13 @@ export default function UALTimelineBuilder() {
   };
 
   const exportIPsToMap = async () => {
-    // Define login operations
-    const loginOperations = [
-      "UserLoggedIn",
-      "SignIn",
-      "UserLoginFailed",
-      "UserLoginSuccess"
-    ];
-
-    // Create a Set to store unique IPs
+    // Create a Set to store unique IPs from timeline events
     const uniqueIPs = new Set<string>();
 
-    // Process each log entry
-    logs.forEach(entry => {
-      if (!loginOperations.includes(entry.Operation)) return;
-      
-      if (userFilters.length > 0) {
-        const entryUser = entry.UserId || entry.UserKey;
-        if (!entryUser || !userFilters.includes(entryUser)) return;
-      }
-
-      const ip = entry.ClientIP;
+    // Process each timeline event
+    timelineEvents.forEach(event => {
+      const entry = event.logEntry;
+      const ip = entry.ClientIP || entry.ClientIPAddress;
       if (ip) {
         uniqueIPs.add(ip);
       }
@@ -915,7 +901,7 @@ export default function UALTimelineBuilder() {
 
     try {
       // Try the API endpoint first
-      const response = await fetch('https://ipinfo.io/tools/map/cli', {
+      const response = await fetch('https://ipinfo.io/tools/map?cli=1', {
         method: 'POST',
         headers: {
           'Content-Type': 'text/plain',
@@ -1772,6 +1758,13 @@ export default function UALTimelineBuilder() {
                       className="hidden"
                     />
                   </label>
+                  <button
+                    onClick={() => setShowIPExportModal(true)}
+                    className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm"
+                  >
+                    <MapPin className="h-3.5 w-3.5" />
+                    <span>View IPs on Map</span>
+                  </button>
                 </div>
               </div>
             </div>
