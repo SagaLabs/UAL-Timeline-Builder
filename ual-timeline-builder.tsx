@@ -1776,69 +1776,86 @@ export default function UALTimelineBuilder() {
                     <p className="text-sm">Add events from the logs to build your investigation timeline</p>
                   </div>
                 ) : (
-                  timelineEvents.map((event) => (
-                    <div
-                      key={event.id}
-                      className={`relative pl-8 pb-4 border-l-2 ${
-                        event.type === 'error' ? 'border-red-500' :
-                        event.type === 'warning' ? 'border-yellow-500' :
-                        'border-blue-500'
-                      }`}
-                    >
-                      <div className={`absolute left-[-5px] top-0 w-3 h-3 rounded-full ${
-                        event.type === 'error' ? 'bg-red-500' :
-                        event.type === 'warning' ? 'bg-yellow-500' :
-                        'bg-blue-500'
-                      }`} />
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="text-sm font-medium">{event.title}</div>
-                          <div className="text-sm text-slate-600 dark:text-slate-400">{event.description}</div>
-                          <div className="text-xs text-slate-500 dark:text-slate-500 mt-1">
-                            {formatDate(event.timestamp)}
+                  timelineEvents.map((event) => {
+                    // Get the IP from the event's logEntry
+                    const ip = event.logEntry.ClientIP || event.logEntry.ClientIPAddress;
+                    return (
+                      <div
+                        key={event.id}
+                        className={`relative pl-8 pb-4 border-l-2 ${
+                          event.type === 'error' ? 'border-red-500' :
+                          event.type === 'warning' ? 'border-yellow-500' :
+                          'border-blue-500'
+                        }`}
+                      >
+                        <div className={`absolute left-[-5px] top-0 w-3 h-3 rounded-full ${
+                          event.type === 'error' ? 'bg-red-500' :
+                          event.type === 'warning' ? 'bg-yellow-500' :
+                          'bg-blue-500'
+                        }`} />
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="text-sm font-medium">{event.title}</div>
+                            <div className="text-sm text-slate-600 dark:text-slate-400">{event.description}</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-500 mt-1">
+                              {formatDate(event.timestamp)}
+                            </div>
+
+                            {/* AbuseIPDB lookup button */}
+                            {ip && (
+                              <button
+                                className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-800 transition-colors"
+                                onClick={() => window.open(`https://www.abuseipdb.com/check/${ip}`, '_blank')}
+                                title={`Lookup ${ip} in AbuseIPDB`}
+                              >
+                                <Globe className="h-3 w-3" />
+                                Lookup in AbuseIP
+                              </button>
+                            )}
+                            
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <button
+                              onClick={() => setActiveNoteId(activeNoteId === event.id ? null : event.id)}
+                              className={`text-sm px-2 py-1 rounded flex items-center gap-1 ${
+                                event.note 
+                                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50' 
+                                  : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-gray-700'
+                              }`}
+                              title={event.note || "Add a note"}
+                            >
+                              <PencilIcon className="h-3.5 w-3.5" />
+                              {event.note ? 'Edit Note' : 'Add Note'}
+                            </button>
+                            <button
+                              onClick={() => removeFromTimeline(event.id)}
+                              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
                           </div>
                         </div>
-                        <div className="flex items-start gap-2">
-                          <button
-                            onClick={() => setActiveNoteId(activeNoteId === event.id ? null : event.id)}
-                            className={`text-sm px-2 py-1 rounded flex items-center gap-1 ${
-                              event.note 
-                                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50' 
-                                : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-gray-700'
-                            }`}
-                            title={event.note || "Add a note"}
-                          >
-                            <PencilIcon className="h-3.5 w-3.5" />
-                            {event.note ? 'Edit Note' : 'Add Note'}
-                          </button>
-                          <button
-                            onClick={() => removeFromTimeline(event.id)}
-                            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </div>
+                        {activeNoteId === event.id && (
+                          <div className="mt-2 relative">
+                            <textarea
+                              className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-400 resize-none shadow-sm"
+                              placeholder="Add a note..."
+                              rows={3}
+                              value={event.note || ''}
+                              onChange={(e) => updateTimelineNote(event.id, e.target.value)}
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => setActiveNoteId(null)}
+                              className="absolute top-1 right-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-full hover:bg-slate-100 dark:hover:bg-gray-700"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
                       </div>
-                      {activeNoteId === event.id && (
-                        <div className="mt-2 relative">
-                          <textarea
-                            className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-400 resize-none shadow-sm"
-                            placeholder="Add a note..."
-                            rows={3}
-                            value={event.note || ''}
-                            onChange={(e) => updateTimelineNote(event.id, e.target.value)}
-                            autoFocus
-                          />
-                          <button
-                            onClick={() => setActiveNoteId(null)}
-                            className="absolute top-1 right-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded-full hover:bg-slate-100 dark:hover:bg-gray-700"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
