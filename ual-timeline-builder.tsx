@@ -77,6 +77,7 @@ interface AuditData {
   AppAccessContext?: {
     ClientAppId?: string;
     ClientIPAddress?: string;
+    AADSessionId?: string;
   };
   OperationProperties?: Array<{
     Name: string;
@@ -230,6 +231,7 @@ export default function UALTimelineBuilder() {
   const [workloadFilters, setWorkloadFilters] = useState<string[]>([])
   const [operationFilters, setOperationFilters] = useState<string[]>([])
   const [ipFilters, setIpFilters] = useState<string[]>([])
+  const [sessionIDFilters, setSessionIDFilters] = useState<string[]>([])
   const [correlationFilter, setCorrelationFilter] = useState("")
   const [showOnlyRisky, setShowOnlyRisky] = useState(false)
   const [visibleCount, setVisibleCount] = useState(100)
@@ -251,10 +253,12 @@ export default function UALTimelineBuilder() {
   const [workloadDropdownOpen, setWorkloadDropdownOpen] = useState(false)
   const [operationDropdownOpen, setOperationDropdownOpen] = useState(false)
   const [ipDropdownOpen, setIpDropdownOpen] = useState(false)
+  const [sessionIDDropdownOpen, setSessionIDDropdownOpen] = useState(false)
   const [userSearchTerm, setUserSearchTerm] = useState("")
   const [workloadSearchTerm, setWorkloadSearchTerm] = useState("")
   const [operationSearchTerm, setOperationSearchTerm] = useState("")
   const [ipSearchTerm, setIpSearchTerm] = useState("")
+  const [sessionIDSearchTerm, setSessionIDSearchTerm] = useState("")
   const [showIPExportModal, setShowIPExportModal] = useState(false)
   const [timelineEvents, setTimelineEvents] = useState<TimelineEntry[]>([]);
   const [showTimeline, setShowTimeline] = useState(false);
@@ -269,6 +273,7 @@ export default function UALTimelineBuilder() {
   const workloadDropdownRef = useRef<HTMLDivElement>(null)
   const operationDropdownRef = useRef<HTMLDivElement>(null)
   const ipDropdownRef = useRef<HTMLDivElement>(null)
+  const sessionIDDropdownRef = useRef<HTMLDivElement>(null)
 
   const riskyOps = [
     "UpdateInboxRule",
@@ -371,6 +376,9 @@ export default function UALTimelineBuilder() {
       }
       if (ipDropdownRef.current && !ipDropdownRef.current.contains(event.target as Node)) {
         setIpDropdownOpen(false)
+      }
+      if (sessionIDDropdownRef.current && !sessionIDDropdownRef.current.contains(event.target as Node)) {
+        setSessionIDDropdownOpen(false)
       }
     }
 
@@ -668,6 +676,31 @@ export default function UALTimelineBuilder() {
     );
   }, [ipOptions, ipSearchTerm]);
 
+  const sessionIDOptions = useMemo(() => {
+    const sessionIDs = new Set<string>();
+    logs.forEach(entry => {
+      try {
+        let auditData: any = entry.AuditData;
+        if (typeof auditData === 'string') {
+          auditData = JSON.parse(auditData);
+        }
+        if (auditData?.AppAccessContext?.AADSessionId) {
+          sessionIDs.add(auditData.AppAccessContext.AADSessionId);
+        }
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    });
+    return Array.from(sessionIDs);
+  }, [logs]);
+
+  const filteredSessionIDOptions = useMemo(() => {
+    if (!sessionIDSearchTerm) return sessionIDOptions;
+    return sessionIDOptions.filter(sessionID => 
+      sessionID.toLowerCase().includes(sessionIDSearchTerm.toLowerCase())
+    );
+  }, [sessionIDOptions, sessionIDSearchTerm]);
+
   // Add a helper function for consistent timestamp parsing
   const parseTimestamp = (timestamp: string) => {
     try {
@@ -711,6 +744,20 @@ export default function UALTimelineBuilder() {
         if (!entryIP || !ipFilters.includes(entryIP)) return false;
       }
 
+      // Skip if sessionID filters are active and this entry doesn't match any selected sessionID
+      if (sessionIDFilters.length > 0) {
+        try {
+          let auditData: any = entry.AuditData;
+          if (typeof auditData === 'string') {
+            auditData = JSON.parse(auditData);
+          }
+          const entrySessionID = auditData?.AppAccessContext?.AADSessionId;
+          if (!entrySessionID || !sessionIDFilters.includes(entrySessionID)) return false;
+        } catch (e) {
+          return false; // If we can't parse the audit data, exclude this entry
+        }
+      }
+
       // Skip if correlation filter is active and this entry doesn't match
       if (correlationFilter) {
         if (!entry.CorrelationId || !entry.CorrelationId.includes(correlationFilter)) return false;
@@ -747,7 +794,7 @@ export default function UALTimelineBuilder() {
       const bTime = parseTimestamp(b.CreationDate || b.TimeGenerated || '');
       return bTime - aTime; // Sort in descending order (newest first)
     });
-  }, [logs, userFilters, workloadFilters, operationFilters, ipFilters, correlationFilter, showOnlyRisky, searchTerm]);
+  }, [logs, userFilters, workloadFilters, operationFilters, ipFilters, sessionIDFilters, correlationFilter, showOnlyRisky, searchTerm]);
 
   const visibleLogs = filteredLogs.slice(0, visibleCount)
 
@@ -756,6 +803,7 @@ export default function UALTimelineBuilder() {
     setWorkloadFilters([])
     setOperationFilters([])
     setIpFilters([])
+    setSessionIDFilters([])
     setCorrelationFilter("")
     setShowOnlyRisky(false)
     setSearchTerm("")
@@ -763,7 +811,7 @@ export default function UALTimelineBuilder() {
   }
 
   // Toggle a filter in a multi-select array
-  const toggleFilter = (type: "user" | "workload" | "operation" | "ip", value: string) => {
+  const toggleFilter = (type: "user" | "workload" | "operation" | "ip" | "sessionID", value: string) => {
     switch (type) {
       case "user":
         setUserFilters((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]))
@@ -777,6 +825,9 @@ export default function UALTimelineBuilder() {
       case "ip":
         setIpFilters((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]))
         break
+      case "sessionID":
+        setSessionIDFilters((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]))
+        break
     }
   }
 
@@ -786,6 +837,7 @@ export default function UALTimelineBuilder() {
     workloadFilters.length > 0 ||
     operationFilters.length > 0 ||
     ipFilters.length > 0 ||
+    sessionIDFilters.length > 0 ||
     correlationFilter ||
     showOnlyRisky ||
     searchTerm
@@ -1812,6 +1864,32 @@ export default function UALTimelineBuilder() {
                                 Lookup in AbuseIP
                               </button>
                             )}
+
+                            {/* SessionID pivot button */}
+                            {(() => {
+                              try {
+                                let auditData: any = event.logEntry.AuditData;
+                                if (typeof auditData === 'string') {
+                                  auditData = JSON.parse(auditData);
+                                }
+                                const sessionID = auditData?.AppAccessContext?.AADSessionId;
+                                if (sessionID) {
+                                  return (
+                                    <button
+                                      className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 rounded hover:bg-orange-200 dark:hover:bg-orange-800 transition-colors"
+                                      onClick={() => toggleFilter("sessionID", sessionID)}
+                                      title={`Pivot on SessionID: ${sessionID}`}
+                                    >
+                                      <Hash className="h-3 w-3" />
+                                      Pivot on SessionID
+                                    </button>
+                                  );
+                                }
+                                return null;
+                              } catch (e) {
+                                return null;
+                              }
+                            })()}
                             
                           </div>
                           <div className="flex items-start gap-2">
@@ -2076,7 +2154,7 @@ export default function UALTimelineBuilder() {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                     {/* Multi-select User dropdown */}
                     <div ref={userDropdownRef} className="relative">
                       <label className="block text-sm font-medium text-slate-400 mb-1.5">Users</label>
@@ -2344,6 +2422,71 @@ export default function UALTimelineBuilder() {
                         </div>
                       )}
                     </div>
+
+                    {/* Multi-select Session ID dropdown */}
+                    <div ref={sessionIDDropdownRef} className="relative">
+                      <label className="block text-sm font-medium text-slate-400 mb-1.5">Session IDs</label>
+                      <button
+                        onClick={() => setSessionIDDropdownOpen(!sessionIDDropdownOpen)}
+                        className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-left transition-all ${
+                          sessionIDFilters.length > 0
+                            ? "bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400"
+                            : "bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 text-slate-900 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600/50"
+                        }`}
+                      >
+                        <span className="truncate">
+                          {sessionIDFilters.length === 0
+                            ? "All Session IDs"
+                            : sessionIDFilters.length === 1
+                              ? sessionIDFilters[0]
+                              : `${sessionIDFilters.length} Session IDs selected`}
+                        </span>
+                        <ChevronDown
+                          className={`h-4 w-4 transition-transform ${sessionIDDropdownOpen ? "rotate-180" : ""}`}
+                        />
+                      </button>
+
+                      {sessionIDDropdownOpen && (
+                        <div className="absolute z-10 mt-1 w-full bg-slate-800 rounded-lg border border-slate-700 shadow-lg max-h-60 overflow-auto">
+                          <div className="p-2 border-b border-slate-700 sticky top-0 bg-slate-800 z-10">
+                            <div className="flex items-center justify-between mb-2">
+                              <button
+                                onClick={() => setSessionIDFilters([])}
+                                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                              >
+                                Clear all
+                              </button>
+                              <div className="relative flex-1 ml-4">
+                                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3 w-3 text-slate-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Search session IDs..."
+                                  value={sessionIDSearchTerm}
+                                  onChange={(e) => setSessionIDSearchTerm(e.target.value)}
+                                  className="pl-7 pr-2 py-1 text-xs w-full rounded bg-slate-700/50 border border-slate-600/50 text-slate-200 placeholder-slate-400 focus:ring-1 focus:ring-blue-500/40 focus:border-blue-500/40 outline-none"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                          <div className="p-1">
+                            {filteredSessionIDOptions.map((sessionID) => (
+                              <div
+                                key={sessionID}
+                                className="flex items-center px-3 py-2 hover:bg-slate-700/50 rounded cursor-pointer"
+                                onClick={() => toggleFilter("sessionID", sessionID)}
+                              >
+                                <div className="mr-2 h-4 w-4 rounded border border-slate-600 flex items-center justify-center">
+                                  {sessionIDFilters.includes(sessionID) && (
+                                    <Check className="h-3 w-3 text-blue-400" />
+                                  )}
+                                </div>
+                                <span className="text-sm text-slate-200">{sessionID}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Risky Operations Toggle */}
@@ -2451,6 +2594,22 @@ export default function UALTimelineBuilder() {
                         </div>
                       ))}
 
+                      {sessionIDFilters.map((sessionID) => (
+                        <div
+                          key={`sessionID-${sessionID}`}
+                          className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20"
+                        >
+                          <span>Session ID: {sessionID}</span>
+                          <button
+                            onClick={() => toggleFilter("sessionID", sessionID)}
+                            className="hover:bg-blue-400/10 rounded-full p-0.5 transition-colors"
+                          >
+                            <X className="h-3 w-3" />
+                            <span className="sr-only">Remove session ID filter</span>
+                          </button>
+                        </div>
+                      ))}
+
                       {correlationFilter && (
                         <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-sm border border-blue-500/20">
                           <span>Correlation ID: {correlationFilter.substring(0, 10)}...</span>
@@ -2531,7 +2690,7 @@ export default function UALTimelineBuilder() {
                                 </div>
                               )}
 
-            <button
+                                          <button
                                 onClick={() => {
                                   const title = `${entry.Operation} by ${entry.UserId || entry.UserKey}`;
                                   let description = `Workload: ${entry.Workload}${entry.ClientIP ? `, IP: ${entry.ClientIP}` : ''}`;
@@ -2641,6 +2800,32 @@ export default function UALTimelineBuilder() {
                                 <Calendar className="h-3.5 w-3.5" />
                                 <span>Add to Investigation</span>
                               </button>
+
+                              {/* SessionID pivot button */}
+                              {(() => {
+                                try {
+                                  let auditData: any = entry.AuditData;
+                                  if (typeof auditData === 'string') {
+                                    auditData = JSON.parse(auditData);
+                                  }
+                                  const sessionID = auditData?.AppAccessContext?.AADSessionId;
+                                  if (sessionID) {
+                                    return (
+                                      <button
+                                        onClick={() => toggleFilter("sessionID", sessionID)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors"
+                                        title={`Pivot on SessionID: ${sessionID}`}
+                                      >
+                                        <Hash className="h-3.5 w-3.5" />
+                                        <span>Pivot on SessionID</span>
+                                      </button>
+                                    );
+                                  }
+                                  return null;
+                                } catch (e) {
+                                  return null;
+                                }
+                              })()}
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
